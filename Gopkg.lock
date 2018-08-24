@@ -64,7 +64,7 @@
   revision = "e404fcfc888570cadd1610538e2dbc89f66af814"
 
 [[projects]]
-  digest = "1:f944518b25f8733eed1d13855eeaaeda9b1f56c2bc75223a7e3427c024168eba"
+  digest = "1:760e92e28b097fe6c8444ff219a4628a911b4ffaf2165bea858106ab82d4f692"
   name = "github.com/btcsuite/btcd"
   packages = [
     "addrmgr",
@@ -82,7 +82,7 @@
     "wire",
   ]
   pruneopts = "UT"
-  revision = "f899737d7f2764dc13e4d01ff00108ec58f766a9"
+  revision = "d81d8877b8f327112e94e814937143a71d1692a7"
 
 [[projects]]
   digest = "1:30d4a548e09bca4a0c77317c58e7407e2a65c15325e944f9c08a7b7992f8a59e"
@@ -107,7 +107,7 @@
   revision = "ab6388e0c60ae4834a1f57511e20c17b5f78be4b"
 
 [[projects]]
-  digest = "1:04bf3f47dafa64588795c5e0329dc662e867c3afa191051821dbacbe09ba2ca8"
+  digest = "1:b6aad1b935c1e7c6cb6be7ecb65288de11e0df0d6224d757816e40009ec52a2c"
   name = "github.com/btcsuite/btcwallet"
   packages = [
     "chain",
@@ -127,7 +127,7 @@
     "wtxmgr",
   ]
   pruneopts = "UT"
-  revision = "5fb94231d0c814f02ffc3110eee588278151b4e1"
+  revision = "7b84dc25a61634c450d21ec7f47d5e916eb88fdb"
 
 [[projects]]
   branch = "master"
@@ -266,16 +266,18 @@
   revision = "462a8a75388506b68f76661af8d649f0b88e5301"
 
 [[projects]]
-  digest = "1:11ab77a97c0db5cfe9c82f16cb7c47213612033e8bd711e6ddc9a32615fc747d"
+  digest = "1:0bb261b9f0a15d60e44926a3e5d27854281f7dd1a9fa129f42c0ac2985754ade"
   name = "github.com/lightninglabs/neutrino"
   packages = [
     ".",
+    "cache",
+    "cache/lru",
     "filterdb",
     "headerfs",
     "headerlist",
   ]
   pruneopts = "UT"
-  revision = "0d0ce901538af81e234c1b2376babf20fe976b09"
+  revision = "31332f9c7a241da72835ad33ff340c3998e30de8"
 
 [[projects]]
   digest = "1:58ab6d6525898cbeb86dc29a68f8e9bfe95254b9032134eb9458779574872260"
