@@ -2442,12 +2442,21 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// channelID, and then use the HTLC ID of the add index
 			// for the original invoice.
 			if invoice.Terms.Status == channeldb.StatusCreatedHashDelay {
-
+				addMsg := &lnwire.UpdateAddHTLC{}
 				updatePacket := &htlcPacket{
 					incomingChanID: l.ShortChanID(),
-					incomingHTLCID: pd.HtlcIndex,
-					outgoingChanID: fwdInfo.NextHop,
+					incomingHTLCID:  pd.HtlcIndex,
+
+					// Special outgoing chan ID for the
+					// switch
+					outgoingChanID: math.MaxUint64
+
+					// Add index of invoice as the outgoing
+					// channel ID.
 					outgoingHTLCID: invoice.AddIndex,
+
+					// Blank HLTC just so the switch 
+					htlc: addMsg, 
 				}
 
 				l.forwardBatch(updatePacket)
