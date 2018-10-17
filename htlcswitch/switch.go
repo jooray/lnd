@@ -1044,6 +1044,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 			// existing pipeline on the other direction for fail
 			// and settle below, using the contract resolution
 			// message stuffs.
+			return nil
 		}
 
 		s.indexMtx.RLock()
