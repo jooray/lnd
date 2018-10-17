@@ -2607,6 +2607,8 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 				continue
 			}
 
+			// TODO: reject onion blob with fff for short chan id
+
 			// Now that this add has been reprocessed, only append
 			// it to our list of packets to forward to the switch
 			// this is the first time processing the add. If the
