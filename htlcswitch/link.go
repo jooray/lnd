@@ -2338,7 +2338,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// TODO(conner): track ownership of settlements to
 			// properly recover from failures? or add batch invoice
 			// settlement
-			if invoice.Terms.Settled {
+			if invoice.Terms.Status == channeldb.StatusSettled {
 				log.Warnf("Accepting duplicate payment for "+
 					"hash=%x", pd.RHash[:])
 			}
@@ -2434,6 +2434,23 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 
 				needUpdate = true
 				continue
+			}
+
+			// We don't have the pre-image yet, but will hold onto
+			// the HTLC as forward it to the switch as if there're
+			// additional hops. We use a special delayed resolution
+			// channelID, and then use the HTLC ID of the add index
+			// for the original invoice.
+			if invoice.Terms.Status == channeldb.StatusCreatedHashDelay {
+
+				updatePacket := &htlcPacket{
+					incomingChanID: l.ShortChanID(),
+					incomingHTLCID: pd.HtlcIndex,
+					outgoingChanID: fwdInfo.NextHop,
+					outgoingHTLCID: invoice.AddIndex,
+				}
+
+				l.forwardBatch(updatePacket)
 			}
 
 			preimage := invoice.Terms.PaymentPreimage

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1014,10 +1015,35 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 	// payment circuit within our internal state so we can properly forward
 	// the ultimate settle message back latter.
 	case *lnwire.UpdateAddHTLC:
-		if packet.incomingChanID == sourceHop {
+		switch {
+		case packet.incomingChanID == sourceHop:
 			// A blank incomingChanID indicates that this is
 			// a pending user-initiated payment.
 			return s.handleLocalDispatch(packet)
+
+		case packet.outgoingChanID == math.MaxUint64:
+			// Special outgoing channel ID, so go ahead and create
+			// both the circuit as well as the keystone.
+			//
+			// TODO: need method to do this all in one, under
+			// single db tx so it isn't cancelled back on restart
+			// when trying to trim
+			inKey := newPaymentCircuit(
+				htlc.PaymentHash, packet,
+			)
+			s.circuits.CommitCircuits(inKey)
+			s.circuits.OpenCircuits(KeyStone{
+				InKey: inKey,
+				OutKey: CircuitKey{
+					ChanID: packet.outgoingChanID,
+					HtlcID: packet.outgoingHTLCID,
+				},
+			})
+
+			// Now since we have a full circuit, we can use the
+			// existing pipeline on the other direction for fail
+			// and settle below, using the contract resolution
+			// message stuffs.
 		}
 
 		s.indexMtx.RLock()
