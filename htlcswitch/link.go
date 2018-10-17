@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"math"
 	prand "math/rand"
 	"sync"
 	"sync/atomic"
@@ -2445,21 +2446,21 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 				addMsg := &lnwire.UpdateAddHTLC{}
 				updatePacket := &htlcPacket{
 					incomingChanID: l.ShortChanID(),
-					incomingHTLCID:  pd.HtlcIndex,
+					incomingHTLCID: pd.HtlcIndex,
 
 					// Special outgoing chan ID for the
 					// switch
-					outgoingChanID: math.MaxUint64
+					outgoingChanID: math.MaxUint64,
 
 					// Add index of invoice as the outgoing
 					// channel ID.
 					outgoingHTLCID: invoice.AddIndex,
 
-					// Blank HLTC just so the switch 
-					htlc: addMsg, 
+					// Blank HLTC just so the switch
+					htlc: addMsg,
 				}
 
-				l.forwardBatch(updatePacket)
+				l.htlcswitch.route(updatePacket)
 			}
 
 			preimage := invoice.Terms.PaymentPreimage
