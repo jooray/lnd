@@ -169,7 +169,7 @@ func (s *UtxoSweeper) Start() error {
 	// Retrieve last published tx from database.
 	lastTx, err := s.cfg.Store.GetLastPublishedTx()
 	if err != nil {
-		return err
+		return fmt.Errorf("get last published tx: %v", err)
 	}
 
 	// Republish in case the previous call crashed lnd. We don't care about
@@ -185,8 +185,8 @@ func (s *UtxoSweeper) Start() error {
 		// Error can be ignored. Because we are starting up, there are
 		// no pending inputs to update based on the publish result.
 		err := s.cfg.PublishTransaction(lastTx)
-		if err != nil {
-			log.Errorf("Last tx publish: %v", err)
+		if err != nil && err != lnwallet.ErrDoubleSpend {
+			return fmt.Errorf("last tx publish: %v", err)
 		}
 	}
 
@@ -197,7 +197,7 @@ func (s *UtxoSweeper) Start() error {
 	// Register for block epochs to retry sweeping every block.
 	bestHash, bestHeight, err := s.cfg.ChainIO.GetBestBlock()
 	if err != nil {
-		return err
+		return fmt.Errorf("get best block: %v", err)
 	}
 
 	log.Debugf("Best height: %v", bestHeight)
@@ -209,7 +209,7 @@ func (s *UtxoSweeper) Start() error {
 		},
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("register block epoch ntfn: %v", err)
 	}
 
 	// Start sweeper main loop.
@@ -220,7 +220,7 @@ func (s *UtxoSweeper) Start() error {
 
 		err := s.collector(blockEpochs.Epochs, bestHeight)
 		if err != nil {
-			log.Errorf("Sweeper stopped: %v", err)
+			log.Errorf("sweeper stopped: %v", err)
 		}
 	}()
 
@@ -314,19 +314,15 @@ func (s *UtxoSweeper) collector(blockEpochs <-chan *chainntnfs.BlockEpoch,
 				input.input.HeightHint(),
 			)
 			if err != nil {
-				err = fmt.Errorf(
-					"cannot watch for spend: %v", err,
-				)
-
-				s.signalAndRemove(&outpoint, Result{Err: err})
-
-				continue
+				return fmt.Errorf("wait for spend: %v", err)
 			}
 			pendInput.ntfnRegCancel = cancel
 
 			// Check to see if with this new input a sweep tx can be
 			// formed.
-			s.scheduleSweep(bestHeight)
+			if err := s.scheduleSweep(bestHeight); err != nil {
+				return fmt.Errorf("schedule sweep: %v", err)
+			}
 
 		// A spend of one of our inputs is detected. Signal sweep
 		// results to the caller(s).
@@ -341,9 +337,9 @@ func (s *UtxoSweeper) collector(blockEpochs <-chan *chainntnfs.BlockEpoch,
 			spendHash := *spend.SpenderTxHash
 			isOurTx, err := s.cfg.Store.IsOurTx(spendHash)
 			if err != nil {
-				log.Errorf("Cannot determine if tx %v "+
-					"is ours: %v", spendHash, err)
-				continue
+				return fmt.Errorf("cannot determine if tx %v "+
+					"is ours: %v", spendHash, err,
+				)
 			}
 
 			// Signal sweep results for inputs in this confirmed tx.
@@ -375,7 +371,9 @@ func (s *UtxoSweeper) collector(blockEpochs <-chan *chainntnfs.BlockEpoch,
 
 			// Now that an input of ours is spent, we can try to
 			// resweep the remaining inputs.
-			s.scheduleSweep(bestHeight)
+			if err := s.scheduleSweep(bestHeight); err != nil {
+				return fmt.Errorf("schedule sweep: %v", err)
+			}
 
 		// The timer expires and we are going to (re)sweep.
 		case <-s.timer:
@@ -391,22 +389,21 @@ func (s *UtxoSweeper) collector(blockEpochs <-chan *chainntnfs.BlockEpoch,
 				s.cfg.SweepTxConfTarget,
 			)
 			if err != nil {
-				return err
+				return fmt.Errorf("estimate fee: %v", err)
 			}
 
 			// Examine pending inputs and try to construct lists of
 			// inputs.
 			inputLists, err := s.getInputLists(bestHeight, satPerKW)
 			if err != nil {
-				log.Errorf("Cannot sweep on timer event: %v",
-					err)
+				return fmt.Errorf("get input lists: %v", err)
 			}
 
 			// Sweep selected inputs.
 			for _, inputs := range inputLists {
 				err := s.sweep(inputs, satPerKW, bestHeight)
 				if err != nil {
-					return err
+					return fmt.Errorf("sweep: %v", err)
 				}
 			}
 
@@ -420,7 +417,9 @@ func (s *UtxoSweeper) collector(blockEpochs <-chan *chainntnfs.BlockEpoch,
 			bestHeight = epoch.Height
 			log.Debugf("Block %v received", bestHeight)
 
-			s.scheduleSweep(bestHeight)
+			if err := s.scheduleSweep(bestHeight); err != nil {
+				return fmt.Errorf("schedule sweep: %v", err)
+			}
 
 		case <-s.quit:
 			return nil
@@ -444,15 +443,14 @@ func (s *UtxoSweeper) scheduleSweep(currentHeight int32) error {
 		s.cfg.SweepTxConfTarget,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("estimate fee: %v", err)
 	}
 
 	// Examine pending inputs and try to construct lists of
 	// inputs.
 	inputLists, err := s.getInputLists(currentHeight, satPerKW)
 	if err != nil {
-		log.Errorf("Cannot sweep on timer event: %v",
-			err)
+		return fmt.Errorf("get input lists: %v", err)
 	}
 
 	// If there are no input sets, there is nothing sweepable and we can
@@ -549,7 +547,7 @@ func (s *UtxoSweeper) getInputLists(currentHeight int32,
 			s.cfg.MaxInputsPerTx,
 		)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("input partitionings: %v", err)
 		}
 	}
 
@@ -560,7 +558,7 @@ func (s *UtxoSweeper) getInputLists(currentHeight int32,
 		s.cfg.MaxInputsPerTx,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("input partitionings: %v", err)
 	}
 
 	// Append the new sets at the end of the list, because those tx likely
@@ -579,7 +577,7 @@ func (s *UtxoSweeper) sweep(inputs inputSet,
 	if s.currentOutputScript == nil {
 		s.currentOutputScript, err = s.cfg.GenSweepScript()
 		if err != nil {
-			return err
+			return fmt.Errorf("gen sweep script: %v", err)
 		}
 	}
 
@@ -589,7 +587,7 @@ func (s *UtxoSweeper) sweep(inputs inputSet,
 		uint32(currentHeight), satPerKW, s.cfg.Signer,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot create sweep tx: %v", err)
+		return fmt.Errorf("create sweep tx: %v", err)
 	}
 
 	// Add tx before publication, so that we will always know that a spend
@@ -599,18 +597,21 @@ func (s *UtxoSweeper) sweep(inputs inputSet,
 	// then and would also not add the hash to the store.
 	err = s.cfg.Store.NotifyPublishTx(tx)
 	if err != nil {
-		return fmt.Errorf("cannot notify publish: %v", err)
+		return fmt.Errorf("notify publish tx: %v", err)
 	}
 
 	// Publish sweep tx.
 	log.Debugf("Publishing sweep tx %v", tx.TxHash())
 	err = s.cfg.PublishTransaction(tx)
 
+	// In case of an unexpected error, don't try to recover.
+	if err != nil && err != lnwallet.ErrDoubleSpend {
+		return fmt.Errorf("publish tx: %v", err)
+	}
+
 	// Keep outputScript in case of an error, so that it can be
 	// reused for the next tx and causes no address inflation.
-	if err != nil {
-		log.Error(err)
-	} else {
+	if err == nil {
 		s.currentOutputScript = nil
 	}
 
@@ -665,7 +666,7 @@ func (s *UtxoSweeper) waitForSpend(outpoint wire.OutPoint,
 		&outpoint, script, heightHint,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("register spend ntfn: %v", err)
 	}
 
 	s.wg.Add(1)
