@@ -2,6 +2,7 @@ package sweep
 
 import (
 	"fmt"
+
 	"github.com/btcsuite/btcwallet/wallet/txrules"
 
 	"sort"
@@ -26,28 +27,29 @@ type inputSet []Input
 
 // generateInputPartitionings goes through all given inputs and constructs sets
 // of inputs that can be used to generate a sensible transaction. Each set
-// contains up to the configured maximum number of inputs. Negative yield inputs
-// are skipped. No input sets with a total value after fees below the dust limit
-// are returned.
+// contains up to the configured maximum number of inputs. Negative yield
+// inputs are skipped. No input sets with a total value after fees below the
+// dust limit are returned.
 func generateInputPartitionings(sweepableInputs []Input,
 	relayFeePerKW, feePerKW lnwallet.SatPerKWeight,
 	maxInputsPerTx int) ([]inputSet, error) {
 
 	// Calculate dust limit based on the P2WPKH output script of the sweep
 	// txes.
-	dustLimit := int64(txrules.GetDustThreshold(
+	dustLimit := txrules.GetDustThreshold(
 		lnwallet.P2WPKHSize,
-		btcutil.Amount(relayFeePerKW.FeePerKVByte())))
+		btcutil.Amount(relayFeePerKW.FeePerKVByte()),
+	)
 
 	// Sort input by yield. We will start constructing input sets starting
-	// with the highest yield inputs. This is to prevent the construction of
-	// a set with an output below the dust limit, causing the sweep process
-	// to stop, while there are still higher value inputs available. It also
-	// allows us to stop evaluating more inputs when the first input in this
-	// ordering is encountered with a negative yield.
+	// with the highest yield inputs. This is to prevent the construction
+	// of a set with an output below the dust limit, causing the sweep
+	// process to stop, while there are still higher value inputs
+	// available. It also allows us to stop evaluating more inputs when the
+	// first input in this ordering is encountered with a negative yield.
 	//
-	// Yield is calculated as the difference between value and added fee for
-	// this input. The fee calculation excludes fee components that are
+	// Yield is calculated as the difference between value and added fee
+	// for this input. The fee calculation excludes fee components that are
 	// common to all inputs, as those wouldn't influence the order. The
 	// single component that is differentiating is witness size.
 	//
@@ -73,13 +75,14 @@ func generateInputPartitionings(sweepableInputs []Input,
 	// Select blocks of inputs up to the configured maximum number.
 	var sets []inputSet
 	for len(sweepableInputs) > 0 {
-		// Get the maximum number of inputs from sweepableInputs that we
-		// can use to create a positive yielding set from.
+		// Get the maximum number of inputs from sweepableInputs that
+		// we can use to create a positive yielding set from.
 		count, outputValue := getPositiveYieldInputs(
 			sweepableInputs, maxInputsPerTx, feePerKW,
 		)
 
-		// If there are no positive yield inputs left, we can stop here.
+		// If there are no positive yield inputs left, we can stop
+		// here.
 		if count == 0 {
 			return sets, nil
 		}
@@ -94,6 +97,9 @@ func generateInputPartitionings(sweepableInputs []Input,
 			return sets, nil
 		}
 
+		log.Infof("Candidate sweep set of size=%v, has yield=%v",
+			count, outputValue)
+
 		sets = append(sets, sweepableInputs[:count])
 		sweepableInputs = sweepableInputs[count:]
 	}
@@ -101,39 +107,39 @@ func generateInputPartitionings(sweepableInputs []Input,
 	return sets, nil
 }
 
-// getPositiveYieldInputs returns the maximum of a number n for which holds that
-// the inputs [0,n) of sweepableInputs have a positive yield. Additionally, the
-// total values of these inputs minus the fee is returned.
+// getPositiveYieldInputs returns the maximum of a number n for which holds
+// that the inputs [0,n) of sweepableInputs have a positive yield.
+// Additionally, the total values of these inputs minus the fee is returned.
 //
-// TODO(roasbeef): Consider including some negative yield inputs too to clean up
-// the utxo set even if it costs us some fees up front.  In the spirit of
+// TODO(roasbeef): Consider including some negative yield inputs too to clean
+// up the utxo set even if it costs us some fees up front.  In the spirit of
 // minimizing any negative externalities we cause for the Bitcoin system as a
 // whole.
 func getPositiveYieldInputs(sweepableInputs []Input, maxInputs int,
-	feePerKW lnwallet.SatPerKWeight) (int, int64) {
+	feePerKW lnwallet.SatPerKWeight) (int, btcutil.Amount) {
 
 	var weightEstimate lnwallet.TxWeightEstimator
 
 	// Add the sweep tx output to the weight estimate.
 	weightEstimate.AddP2WKHOutput()
 
-	var total, outputValue int64
+	var total, outputValue btcutil.Amount
 	for idx, input := range sweepableInputs {
-		// Can ignore error, because it has already been checked
-		// when calculating the yields.
+		// Can ignore error, because it has already been checked when
+		// calculating the yields.
 		size, _ := getInputWitnessSizeUpperBound(input)
 
 		// Keep a running weight estimate of the input set.
 		weightEstimate.AddWitnessInput(size)
 
-		newTotal := total + input.SignDesc().Output.Value
+		newTotal := total + btcutil.Amount(input.SignDesc().Output.Value)
 
 		weight := weightEstimate.Weight()
 		fee := feePerKW.FeeForWeight(int64(weight))
 
-		// Calculate the output value if the current input would
-		// be added to the set.
-		newOutputValue := newTotal - int64(fee)
+		// Calculate the output value if the current input would be
+		// added to the set.
+		newOutputValue := newTotal - fee
 
 		// If adding this input makes the total output value of the set
 		// decrease, this is a negative yield input. It shouldn't be
@@ -163,6 +169,7 @@ func createSweepTx(inputs []Input, outputPkScript []byte,
 	signer lnwallet.Signer) (*wire.MsgTx, error) {
 
 	inputs, txWeight, csvCount, cltvCount := getWeightEstimate(inputs)
+
 	log.Infof("Creating sweep transaction for %v inputs (%v CSV, %v CLTV) "+
 		"using %v sat/kw", len(inputs), csvCount, cltvCount,
 		int64(feePerKw))

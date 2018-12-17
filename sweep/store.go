@@ -95,6 +95,8 @@ func NewSweeperStore(db *channeldb.DB) (SweeperStore, error) {
 // is not implemented as a database migration, to keep the downgrade path open.
 func migrateTxHashes(tx *bbolt.Tx, txHashesBucket *bbolt.Bucket) error {
 
+	log.Infof("Migrating UTXO nursery finalized TXIDs")
+
 	// Iterate over all nursery chain buckets.
 	return tx.ForEach(func(name []byte, chainBucket *bbolt.Bucket) error {
 		// Skip non-nursery buckets
@@ -137,15 +139,10 @@ func migrateTxHashes(tx *bbolt.Tx, txHashesBucket *bbolt.Bucket) error {
 			hash := tx.TxHash()
 
 			// Insert utxn tx hash in hashes bucket.
-			log.Debugf(
-				"Inserting nursery tx %v in hash list", hash,
-			)
-			err = txHashesBucket.Put(hash[:], []byte{})
-			if err != nil {
-				return err
-			}
+			log.Debugf("Inserting nursery tx %v in hash list "+
+				"(height=%v)", hash, k)
 
-			return nil
+			return txHashesBucket.Put(hash[:], []byte{})
 		})
 		if err != nil {
 			return err
