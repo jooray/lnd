@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lightningnetwork/lightning-onion"
+
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -2558,6 +2560,8 @@ type rpcPaymentIntent struct {
 	cltvDelta  uint16
 	routeHints [][]routing.HopHint
 
+	eob *sphinx.ExtraHopData
+
 	routes []*routing.Route
 }
 
@@ -2677,6 +2681,28 @@ func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error
 	// If the user is manually specifying payment details, then the payment
 	// hash may be encoded as a string.
 	switch {
+	// A sphinx send, so we should generate an EOB with the preimage.
+	case rpcPayReq.Sphinx:
+		// TODO(roasbeef): make deterministic? also saves I/O of /dev/random
+		var preImage [32]byte
+		_, err := io.ReadFull(rand.Reader, preImage[:])
+		if err != nil {
+			return payIntent, err
+		}
+
+		rpcsLog.Infof("Sphinx payment! preimage=%x", preImage[:])
+
+		// Populate the EOB to the final hop which indicates that this
+		// is a spontaneous payment.
+		payIntent.eob = &sphinx.ExtraHopData{
+			Type:           sphinx.EOBSphinxSend,
+			ExtraOnionBlob: preImage[:],
+		}
+
+		// We'll also set the payment hash accordingly.
+		payHash := sha256.Sum256(preImage[:])
+		copy(payIntent.rHash[:], payHash[:])
+
 	case rpcPayReq.PaymentHashString != "":
 		paymentHash, err := hex.DecodeString(
 			rpcPayReq.PaymentHashString,
@@ -2744,6 +2770,10 @@ func (r *rpcServer) dispatchPaymentIntent(
 			FeeLimit:    payIntent.feeLimit,
 			PaymentHash: payIntent.rHash,
 			RouteHints:  payIntent.routeHints,
+		}
+
+		if payIntent.eob != nil {
+			payment.DestinationEOB = payIntent.eob
 		}
 
 		// If the final CLTV value was specified, then we'll use that
