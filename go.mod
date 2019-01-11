@@ -5,9 +5,8 @@ require (
 	github.com/NebulousLabs/fastrand v0.0.0-20180208210444-3cf7173006a0 // indirect
 	github.com/NebulousLabs/go-upnp v0.0.0-20180202185039-29b680b06c82
 	github.com/Yawning/aez v0.0.0-20180114000226-4dad034d9db2
-	github.com/aead/chacha20 v0.0.0-20180709150244-8b13a72661da // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
-	github.com/btcsuite/btcd v0.0.0-20180824064422-7d2daa5bfef28c5e282571bc06416516936115ee
+	github.com/btcsuite/btcd v0.0.0-20181130015935-7d2daa5bfef2
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f
 	github.com/btcsuite/btcutil v0.0.0-20180706230648-ab6388e0c60ae4834a1f57511e20c17b5f78be4b
 	github.com/btcsuite/btcwallet v0.0.0-20181130221647-e59e51f8e13c
@@ -40,7 +39,7 @@ require (
 	github.com/tv42/zbase32 v0.0.0-20160707012821-501572607d02
 	github.com/urfave/cli v1.18.0
 	go.etcd.io/bbolt v1.3.0 // indirect
-	golang.org/x/crypto v0.0.0-20181127143415-eb0de9b17e85
+	golang.org/x/crypto v0.0.0-20190103213133-ff983b9c42bc
 	golang.org/x/net v0.0.0-20181106065722-10aee1819953
 	golang.org/x/sync v0.0.0-20181108010431-42b317875d0f // indirect
 	golang.org/x/time v0.0.0-20180412165947-fbb02b2291d2
@@ -53,3 +52,5 @@ require (
 	gopkg.in/mgo.v2 v2.0.0-20180705113604-9856a29383ce // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 )
+
+replace github.com/lightningnetwork/lightning-onion v0.0.0-20180605012408-ac4d9da8f1d6 => github.com/roasbeef/lightning-onion v0.0.0-20190111024907-2e5ae8769604
