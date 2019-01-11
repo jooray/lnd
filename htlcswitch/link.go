@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lightningnetwork/lightning-onion"
+
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
@@ -2308,23 +2310,55 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 				continue
 			}
 
-			// We're the designated payment destination.  Therefore
-			// we attempt to see if we have an invoice locally
-			// which'll allow us to settle this htlc.
-			invoiceHash := chainhash.Hash(pd.RHash)
-			invoice, minCltvDelta, err := l.cfg.Registry.LookupInvoice(
-				invoiceHash,
+			// An HTLC is spontaneous if this is the debug HTLC
+			// mode, or if the onion packet has an EOB, and it's of
+			// the type of a shpinx send.
+			var (
+				// TODO(roasbeef): needed to avoid current import cycle
+				minCltvDelta uint32 = 144
+				invoice      channeldb.Invoice
+				preimage     [32]byte
+				err          error
 			)
-			if err != nil {
-				log.Errorf("unable to query invoice registry: "+
-					" %v", err)
-				failure := lnwire.FailUnknownPaymentHash{}
-				l.sendHTLCError(
-					pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
+			spontaneousHTLC := l.cfg.DebugHTLC
+
+			switch chanIterator.ExtraOnionBlob().Type {
+			// If the EOB type indicates a sphinx send, then the
+			// preimage is encoded in the 32- byters of the EOB
+			// payload.
+			case sphinx.EOBSphinxSend:
+				copy(
+					preimage[:],
+					chanIterator.ExtraOnionBlob().ExtraOnionBlob,
 				)
 
-				needUpdate = true
-				continue
+			// An empty EOB means they didn't send su any special
+			// data, and we need to look up the
+			case sphinx.EOBEmpty:
+				fallthrough
+			default:
+				// We're the designated payment destination.
+				// Therefore we attempt to see if we have an
+				// invoice locally which'll allow us to settle
+				// this htlc.
+				invoiceHash := chainhash.Hash(pd.RHash)
+				invoice, minCltvDelta, err = l.cfg.Registry.LookupInvoice(
+					invoiceHash,
+				)
+				if err != nil {
+					log.Errorf("unable to query invoice registry: "+
+						" %v", err)
+					failure := lnwire.FailUnknownPaymentHash{}
+					l.sendHTLCError(
+						pd.HtlcIndex, failure,
+						obfuscator, pd.SourceRef,
+					)
+
+					needUpdate = true
+					continue
+				}
+
+				preimage = invoice.Terms.PaymentPreimage
 			}
 
 			// If the invoice is already settled, we choose to
@@ -2360,7 +2394,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// allows the payee to specify the amount of satoshis
 			// they wish to send.  So since we expect the htlc to
 			// have a different amount, we should not fail.
-			if !l.cfg.DebugHTLC && invoice.Terms.Value > 0 &&
+			if !spontaneousHTLC && invoice.Terms.Value > 0 &&
 				pd.Amount < invoice.Terms.Value {
 
 				log.Errorf("rejecting htlc due to incorrect "+
@@ -2386,7 +2420,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// allows the payee to specify the amount of satoshis
 			// they wish to send.  So since we expect the htlc to
 			// have a different amount, we should not fail.
-			if !l.cfg.DebugHTLC && invoice.Terms.Value > 0 &&
+			if !spontaneousHTLC && invoice.Terms.Value > 0 &&
 				fwdInfo.AmountToForward < invoice.Terms.Value {
 
 				log.Errorf("Onion payload of incoming htlc(%x) "+
@@ -2439,7 +2473,6 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 				continue
 			}
 
-			preimage := invoice.Terms.PaymentPreimage
 			err = l.channel.SettleHTLC(
 				preimage, pd.HtlcIndex, pd.SourceRef, nil, nil,
 			)
@@ -2449,16 +2482,19 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 				return false
 			}
 
-			// Notify the invoiceRegistry of the invoices we just
-			// settled (with the amount accepted at settle time)
-			// with this latest commitment update.
-			err = l.cfg.Registry.SettleInvoice(
-				invoiceHash, pd.Amount,
-			)
-			if err != nil {
-				l.fail(LinkFailureError{code: ErrInternalError},
-					"unable to settle invoice: %v", err)
-				return false
+			if !spontaneousHTLC {
+				// Notify the invoiceRegistry of the invoices
+				// we just settled (with the amount accepted at
+				// settle time) with this latest commitment
+				// update.
+				err = l.cfg.Registry.SettleInvoice(
+					chainhash.Hash(pd.RHash), pd.Amount,
+				)
+				if err != nil {
+					l.fail(LinkFailureError{code: ErrInternalError},
+						"unable to settle invoice: %v", err)
+					return false
+				}
 			}
 
 			l.infof("settling %x as exit hop", pd.RHash)
@@ -2466,7 +2502,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// If the link is in hodl.BogusSettle mode, replace the
 			// preimage with a fake one before sending it to the
 			// peer.
-			if l.cfg.DebugHTLC &&
+			if spontaneousHTLC &&
 				l.cfg.HodlMask.Active(hodl.BogusSettle) {
 				l.warnf(hodl.BogusSettle.Warning())
 				preimage = [32]byte{}

@@ -87,6 +87,11 @@ type HopIterator interface {
 	// information given to it by the prior hop.
 	ForwardingInstructions() ForwardingInfo
 
+	// ExtraOnionBlob returns any parsed EOB data if any. If data is
+	// present, then the Type field will be anything other than
+	// sphinx.EOBEmpty.
+	ExtraOnionBlob() sphinx.ExtraHopData
+
 	// EncodeNextHop encodes the onion packet destined for the next hop
 	// into the passed io.Writer.
 	EncodeNextHop(w io.Writer) error
@@ -157,6 +162,14 @@ func (r *sphinxHopIterator) ForwardingInstructions() ForwardingInfo {
 		AmountToForward: lnwire.MilliSatoshi(fwdInst.ForwardAmount),
 		OutgoingCTLV:    fwdInst.OutgoingCltv,
 	}
+}
+
+// ExtraOnionBlob returns any parsed EOB data if any. If data is present, then
+// the Type field will be anything other than sphinx.EOBEmpty.
+//
+// NOTE: Part of the HopIterator interface.
+func (r *sphinxHopIterator) ExtraOnionBlob() sphinx.ExtraHopData {
+	return r.processedPacket.ExtraData
 }
 
 // ExtractErrorEncrypter decodes and returns the ErrorEncrypter for this hop,
