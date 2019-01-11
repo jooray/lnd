@@ -1940,6 +1940,10 @@ var sendPaymentCommand = cli.Command{
 			Name:  "force, f",
 			Usage: "will skip payment request confirmation",
 		},
+		cli.BoolFlag{
+			Name:  "sphinx",
+			Usage: "will generate a pre-image and encode it in the sphinx packet",
+		},
 	},
 	Action: sendPayment,
 }
@@ -2076,11 +2080,12 @@ func sendPayment(ctx *cli.Context) error {
 		Dest:     destNode,
 		Amt:      amount,
 		FeeLimit: feeLimit,
+		Sphinx:   ctx.Bool("sphinx"),
 	}
 
 	if ctx.Bool("debug_send") && (ctx.IsSet("payment_hash") || args.Present()) {
 		return fmt.Errorf("do not provide a payment hash with debug send")
-	} else if !ctx.Bool("debug_send") {
+	} else if !ctx.Bool("debug_send") && !ctx.Bool("sphinx") {
 		var rHash []byte
 
 		switch {
