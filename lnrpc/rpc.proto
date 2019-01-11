@@ -770,6 +770,15 @@ message SendRequest {
     send the payment.
     */
     FeeLimit fee_limit = 8;
+
+    /*
+    If set, then no payment hash is required. Instead, we will generate a
+    payment hash ourselves, and encode the pre-image in an EOB encrypted to the
+    final hop. Not that the payment request MUST NOT be specified in order for
+    this flag to be parsed.
+    TODO(roasbeef): add BOLT 11 fields that can be encoded as well?
+    */
+    bool sphinx = 9;
 }
 message SendResponse {
     string payment_error = 1 [json_name = "payment_error"];

@@ -2853,6 +2853,11 @@
         "fee_limit": {
           "$ref": "#/definitions/lnrpcFeeLimit",
           "description": "*\nThe maximum number of satoshis that will be paid as a fee of the payment.\nThis value can be represented either as a percentage of the amount being\nsent, or as a fixed amount of the maximum fee the user is willing the pay to\nsend the payment."
+        },
+        "sphinx": {
+          "type": "boolean",
+          "format": "boolean",
+          "title": "If set, then no payment hash is required. Instead, we will generate a\npayment hash ourselves, and encode the pre-image in an EOB encrypted to the\nfinal hop. Not that the payment request MUST NOT be specified in order for\nthis flag to be parsed.\nTODO(roasbeef): add BOLT 11 fields that can be encoded as well?"
         }
       }
     },
