@@ -192,21 +192,33 @@ func (r *Route) containsChannel(chanID uint64) bool {
 	return ok
 }
 
-// ToHopPayloads converts a complete route into the series of per-hop payloads
-// that is to be encoded within each HTLC using an opaque Sphinx packet.
-func (r *Route) ToHopPayloads() []sphinx.HopData {
-	hopPayloads := make([]sphinx.HopData, len(r.Hops))
+// ToSphinxPath converts a complete route into a sphinx PaymentPath that
+// contains the per-hop paylods used to encoding the HTLC routing data for each
+// hop in the route.
+func (r *Route) ToSphinxPath() (*sphinx.PaymentPath, error) {
+	var path sphinx.PaymentPath
 
 	// For each hop encoded within the route, we'll convert the hop struct
-	// to the matching per-hop payload struct as used by the sphinx
-	// package.
+	// to an OnionHop with matching per-hop payload within the path as used
+	// by the sphinx package.
 	for i, hop := range r.Hops {
-		hopPayloads[i] = sphinx.HopData{
-			// TODO(roasbeef): properly set realm, make sphinx type
-			// an enum actually?
-			Realm:         0,
-			ForwardAmount: uint64(hop.AmtToForward),
-			OutgoingCltv:  hop.OutgoingTimeLock,
+		pub, err := btcec.ParsePubKey(
+			hop.PubKeyBytes[:], btcec.S256(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		pub.Curve = nil
+
+		path[i] = sphinx.OnionHop{
+			NodePub: *pub,
+			HopData: sphinx.HopData{
+				// TODO(roasbeef): properly set realm, make
+				// sphinx type an enum actually?
+				Realm:         [1]byte{0},
+				ForwardAmount: uint64(hop.AmtToForward),
+				OutgoingCltv:  hop.OutgoingTimeLock,
+			},
 		}
 
 		// As a base case, the next hop is set to all zeroes in order
@@ -219,11 +231,12 @@ func (r *Route) ToHopPayloads() []sphinx.HopData {
 			nextHop = r.Hops[i+1].ChannelID
 		}
 
-		binary.BigEndian.PutUint64(hopPayloads[i].NextAddress[:],
-			nextHop)
+		binary.BigEndian.PutUint64(
+			path[i].HopData.NextAddress[:], nextHop,
+		)
 	}
 
-	return hopPayloads
+	return &path, nil
 }
 
 // newRoute returns a fully valid route between the source and target that's
