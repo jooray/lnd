@@ -2144,8 +2144,11 @@ func TestIsStaleEdgePolicy(t *testing.T) {
 func TestEmptyRoutesGenerateSphinxPacket(t *testing.T) {
 	t.Parallel()
 
+	payment := &LightningPayment{}
+	copy(payment.PaymentHash[:], testHash[:])
+
 	emptyRoute := &Route{}
-	_, _, err := generateSphinxPacket(emptyRoute, testHash[:])
+	_, _, err := generateSphinxPacket(emptyRoute, payment)
 	if err != ErrNoRouteHopsProvided {
 		t.Fatalf("expected empty hops error: instead got: %v", err)
 	}

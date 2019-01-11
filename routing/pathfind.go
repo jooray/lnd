@@ -195,7 +195,9 @@ func (r *Route) containsChannel(chanID uint64) bool {
 // ToSphinxPath converts a complete route into a sphinx PaymentPath that
 // contains the per-hop paylods used to encoding the HTLC routing data for each
 // hop in the route.
-func (r *Route) ToSphinxPath() (*sphinx.PaymentPath, error) {
+func (r *Route) ToSphinxPath(destEOB *sphinx.ExtraHopData) (
+	*sphinx.PaymentPath, error) {
+
 	var path sphinx.PaymentPath
 
 	// For each hop encoded within the route, we'll convert the hop struct
@@ -208,7 +210,6 @@ func (r *Route) ToSphinxPath() (*sphinx.PaymentPath, error) {
 		if err != nil {
 			return nil, err
 		}
-		pub.Curve = nil
 
 		path[i] = sphinx.OnionHop{
 			NodePub: *pub,
@@ -234,6 +235,12 @@ func (r *Route) ToSphinxPath() (*sphinx.PaymentPath, error) {
 		binary.BigEndian.PutUint64(
 			path[i].HopData.NextAddress[:], nextHop,
 		)
+
+		// If this is the final hop, and we have an EOB to give it,
+		// then we'll emplace it within the OnionHop as well.
+		if i == len(r.Hops)-1 && destEOB != nil {
+			path[i].ExtraData = *destEOB
+		}
 	}
 
 	return &path, nil
