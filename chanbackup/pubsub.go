@@ -49,7 +49,7 @@ type ChannelEvent struct {
 type ChannelSubscription struct {
 	// ChanUpdates is a read-only channel that will be sent upon once the
 	// primary channel state is updated.
-	ChanUpdates <-chan ChannelEvent
+	ChanUpdates chan ChannelEvent
 
 	// Cancel is a closure that allows the caller to cancel their
 	// subscription and free up any resources allocated.
@@ -172,6 +172,19 @@ func (s *SubSwapper) backupUpdater() {
 
 	log.Debugf("SubSwapper's backupUpdater is active!")
 
+	// Before we enter our main loop, we'll trigger a manual event (an
+	// empty one) to ensure a backup file is written if this is the first
+	// time we're starting with this feature.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+
+		select {
+		case s.chanEvents.ChanUpdates <- ChannelEvent{}:
+		case <-s.quit:
+		}
+	}()
+
 	for {
 		select {
 		// The channel state has been modified! We'll evaluate all
@@ -183,7 +196,7 @@ func (s *SubSwapper) backupUpdater() {
 			// For all new open channels, we'll create a new SCB
 			// given the required information.
 			for _, newChan := range chanUpdate.NewChans {
-				log.Debugf("Adding chanenl %v to backup state",
+				log.Debugf("Adding channel %v to backup state",
 					newChan.FundingOutpoint)
 
 				s.backupState[newChan.FundingOutpoint] = NewSingle(
