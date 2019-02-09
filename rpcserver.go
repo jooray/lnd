@@ -4709,28 +4709,16 @@ func (r *rpcServer) ExportChannelBackup(ctx context.Context,
 	}, nil
 }
 
-// ExportAllChannelBackups returns static channel backups for all existing
-// channels known to lnd. A set of regular singular static channel backups for
-// each channel are returned. Additionally, a multi-channel backup is returned
-// as well, which contains a single encrypted blob containing the backups of
-// each channel.
-func (r *rpcServer) ExportAllChannelBackups(ctx context.Context,
-	in *lnrpc.ChanBackupExportRequest) (*lnrpc.ChanBackupSnapshot, error) {
-
-	// First, we'll attempt to read back ups for ALL currently opened
-	// channels from disk.
-	allUnpackedBackups, err := chanbackup.FetchStaticChanBackups(
-		r.server.chanDB,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("unable to fetch all static chan "+
-			"backups: %v", err)
-	}
+// createBackupSnapshot converts the passed Single backup into a snapshot which
+// contains individual packed single backups, as well as a single packed multi
+// backup.
+func (r *rpcServer) createBackupSnapshot(backups []chanbackup.Single) (
+	*lnrpc.ChanBackupSnapshot, error) {
 
 	// Once we have the set of back ups, we'll attempt to pack them all
 	// into a series of single channel backups.
 	singleChanPackedBackups, err := chanbackup.PackStaticChanBackups(
-		allUnpackedBackups, r.server.cc.keyRing,
+		backups, r.server.cc.keyRing,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to pack set of chan "+
@@ -4739,13 +4727,15 @@ func (r *rpcServer) ExportAllChannelBackups(ctx context.Context,
 
 	// Now that we have our set of single packed backups, we'll morph that
 	// into a form that the proto response requires.
+	numBackups := len(singleChanPackedBackups)
 	singleBackupResp := &lnrpc.ChannelBackups{
-		ChanBackups: make([]*lnrpc.ChannelBackup, 0, len(singleChanPackedBackups)),
+		ChanBackups: make([]*lnrpc.ChannelBackup, 0, numBackups),
 	}
 	for chanPoint, singlePackedBackup := range singleChanPackedBackups {
+		txid := chanPoint.Hash
 		rpcChanPoint := &lnrpc.ChannelPoint{
 			FundingTxid: &lnrpc.ChannelPoint_FundingTxidBytes{
-				FundingTxidBytes: chanPoint.Hash[:],
+				FundingTxidBytes: txid[:],
 			},
 			OutputIndex: chanPoint.Index,
 		}
@@ -4764,7 +4754,7 @@ func (r *rpcServer) ExportAllChannelBackups(ctx context.Context,
 	// file for safe storage.
 	var b bytes.Buffer
 	unpackedMultiBackup := chanbackup.Multi{
-		StaticBackups: allUnpackedBackups,
+		StaticBackups: backups,
 	}
 	err = unpackedMultiBackup.PackToWriter(&b, r.server.cc.keyRing)
 	if err != nil {
@@ -4786,6 +4776,28 @@ func (r *rpcServer) ExportAllChannelBackups(ctx context.Context,
 	}, nil
 }
 
+// ExportAllChannelBackups returns static channel backups for all existing
+// channels known to lnd. A set of regular singular static channel backups for
+// each channel are returned. Additionally, a multi-channel backup is returned
+// as well, which contains a single encrypted blob containing the backups of
+// each channel.
+func (r *rpcServer) ExportAllChannelBackups(ctx context.Context,
+	in *lnrpc.ChanBackupExportRequest) (*lnrpc.ChanBackupSnapshot, error) {
+
+	// First, we'll attempt to read back ups for ALL currently opened
+	// channels from disk.
+	allUnpackedBackups, err := chanbackup.FetchStaticChanBackups(
+		r.server.chanDB,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch all static chan "+
+			"backups: %v", err)
+	}
+
+	// With the backups assembled, we'll create a full snapshot.
+	return r.createBackupSnapshot(allUnpackedBackups)
+}
+
 // RestoreChannelBackups accepts a set of singular channel backups, or a single
 // encrypted multi-chan backup and attempts to recover any funds remaining
 // within the channel. If we're able to unpack the backup, then the new channel
@@ -4798,8 +4810,9 @@ func (r *rpcServer) RestoreChannelBackups(ctx context.Context,
 	// restore either a set of chanbackup.Single or chanbackup.Multi
 	// backups.
 	chanRestorer := &chanDBRestorer{
-		r.server.chanDB,
-		r.server.cc.keyRing,
+		db:         r.server.chanDB,
+		secretKeys: r.server.cc.keyRing,
+		chainArb:   r.server.chainArb,
 	}
 
 	// We'll accept either a list of Single backups, or a single Multi
