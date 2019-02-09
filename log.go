@@ -14,6 +14,7 @@ import (
 	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/chainntnfs"
+	"github.com/lightningnetwork/lnd/chanbackup"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/channelnotifier"
 	"github.com/lightningnetwork/lnd/contractcourt"
@@ -82,6 +83,7 @@ var (
 	ntfrLog = build.NewSubLogger("NTFR", backendLog.Logger)
 	irpcLog = build.NewSubLogger("IRPC", backendLog.Logger)
 	chnfLog = build.NewSubLogger("CHNF", backendLog.Logger)
+	chbuLog = build.NewSubLogger("CHBU", backendLog.Logger)
 )
 
 // Initialize package-global logger variables.
@@ -108,6 +110,7 @@ func init() {
 	chainrpc.UseLogger(ntfrLog)
 	invoicesrpc.UseLogger(irpcLog)
 	channelnotifier.UseLogger(chnfLog)
+	chanbackup.UseLogger(chbuLog)
 }
 
 // subsystemLoggers maps each subsystem identifier to its associated logger.
@@ -140,6 +143,7 @@ var subsystemLoggers = map[string]btclog.Logger{
 	"NTFR": ntfnLog,
 	"IRPC": irpcLog,
 	"CHNF": chnfLog,
+	"CHBU": chbuLog,
 }
 
 // initLogRotator initializes the logging rotator to write logs to logFile and
