@@ -117,7 +117,8 @@ type nodeConfig struct {
 	ReadMacPath    string
 	InvoiceMacPath string
 
-	HasSeed bool
+	HasSeed  bool
+	Password []byte
 
 	P2PPort  int
 	RPCPort  int
@@ -439,13 +440,30 @@ func (hn *HarnessNode) Init(ctx context.Context,
 
 	// Wait for the wallet to finish unlocking, such that we can connect to
 	// it via a macaroon-authenticated rpc connection.
-	}, 5*time.Second); err != nil {
 	return hn.initClientWhenReady()
 }
+
+// Unlock attempts to unlock the wallet of the target HarnessNode. This method
+// should be called after the restart of a HarnessNode that was created with a
+// seed+password. Once this method returns, the HarnessNode will be ready to
+// accept normal gRPC requests and harness command.
+func (hn *HarnessNode) Unlock(ctx context.Context, password []byte) error {
+
+	timeout := time.Duration(time.Second * 15)
+	ctxt, _ := context.WithTimeout(ctx, timeout)
+
+	// Otherwise, we'll need to unlock the node before it's able to
+	// start up properly.
+	unlockReq := &lnrpc.UnlockWalletRequest{
+		WalletPassword: password,
+	}
+	if _, err := hn.UnlockWallet(ctxt, unlockReq); err != nil {
 		return err
 	}
 
-	return hn.initLightningClient(conn)
+	// Now that the wallet has been unlocked, we'll wait for the RPC client
+	// to be ready, then establish the normal gRPC connection.
+	return hn.initClientWhenReady()
 }
 
 // initLightningClient constructs the grpc LightningClient from the given client
