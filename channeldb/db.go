@@ -927,6 +927,7 @@ func (d *DB) RestoreChannelShells(channelShells ...*ChannelShell) error {
 				ChannelID:    channel.ShortChannelID.ToUint64(),
 				ChainHash:    channel.ChainHash,
 				ChannelPoint: channel.FundingOutpoint,
+				Capacity:     channel.Capacity,
 			}
 
 			nodes := tx.Bucket(nodeBucket)
