@@ -121,7 +121,8 @@ func (c *chanDBRestorer) RestoreChansFromSingles(backups ...chanbackup.Single) e
 		channelShells = append(channelShells, chanShell)
 	}
 
-	ltndLog.Infof("Inserting %v SCB channel shells into DB")
+	ltndLog.Infof("Inserting %v SCB channel shells into DB",
+		len(channelShells))
 
 	// Now that we have all the backups mapped into a series of Singles,
 	// we'll insert them all into the database.
@@ -169,7 +170,7 @@ func (s *server) ConnectPeer(nodePub *btcec.PublicKey, addrs []net.Addr) error {
 
 		if err := s.ConnectToPeer(netAddr, true); err != nil {
 			return fmt.Errorf("unable to connect to %v to "+
-				"complete SCB restore", netAddr)
+				"complete SCB restore: %v", netAddr, err)
 		}
 	}
 
