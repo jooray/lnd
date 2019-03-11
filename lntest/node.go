@@ -464,16 +464,14 @@ func (hn *HarnessNode) Init(ctx context.Context,
 // should be called after the restart of a HarnessNode that was created with a
 // seed+password. Once this method returns, the HarnessNode will be ready to
 // accept normal gRPC requests and harness command.
-func (hn *HarnessNode) Unlock(ctx context.Context, password []byte) error {
+func (hn *HarnessNode) Unlock(ctx context.Context,
+	unlockReq *lnrpc.UnlockWalletRequest) error {
 
 	timeout := time.Duration(time.Second * 15)
 	ctxt, _ := context.WithTimeout(ctx, timeout)
 
-	// Otherwise, we'll need to unlock the node before it's able to
-	// start up properly.
-	unlockReq := &lnrpc.UnlockWalletRequest{
-		WalletPassword: password,
-	}
+	// Otherwise, we'll need to unlock the node before it's able to start
+	// up properly.
 	if _, err := hn.UnlockWallet(ctxt, unlockReq); err != nil {
 		return err
 	}
