@@ -1790,9 +1790,10 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 		// make sure that the router doesn't already have a fresher
 		// announcement for this edge.
 		timestamp := time.Unix(int64(msg.Timestamp), 0)
-		if d.cfg.Router.IsStaleEdgePolicy(
+		isStale, _ := d.cfg.Router.IsStaleEdgePolicy(
 			msg.ShortChannelID, timestamp, msg.ChannelFlags,
-		) {
+		)
+		if isStale {
 
 			nMsg.err <- nil
 			return nil

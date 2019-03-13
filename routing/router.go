@@ -76,14 +76,25 @@ type ChannelGraphSource interface {
 	IsPublicNode(node Vertex) (bool, error)
 
 	// IsKnownEdge returns true if the graph source already knows of the
-	// passed channel ID.
+	// passed channel ID either as a live or zombie channel.
 	IsKnownEdge(chanID lnwire.ShortChannelID) bool
 
 	// IsStaleEdgePolicy returns true if the graph source has a channel
 	// edge for the passed channel ID (and flags) that have a more recent
-	// timestamp.
+	// timestamp. The second bool returned is to denote whether the channel
+	// for which the edge belongs to is considered a zombie channel.
 	IsStaleEdgePolicy(chanID lnwire.ShortChannelID, timestamp time.Time,
-		flags lnwire.ChanUpdateChanFlags) bool
+		flags lnwire.ChanUpdateChanFlags) (bool, bool)
+
+	// MarkEdgeZombie marks an edge as a zombie within our zombie index.
+	MarkEdgeZombie(chanID lnwire.ShortChannelID) error
+
+	// MarkEdgeLive clears an edge from our zombie index, deeming it as
+	// live.
+	MarkEdgeLive(chanID lnwire.ShortChannelID) error
+
+	// IsZombieEdge returns whether the edge is considered zombie.
+	IsZombieEdge(chanID lnwire.ShortChannelID) bool
 
 	// ForAllOutgoingChannels is used to iterate over all channels
 	// emanating from the "source" node which is the center of the
@@ -2238,7 +2249,7 @@ func (r *ChannelRouter) IsPublicNode(node Vertex) (bool, error) {
 }
 
 // IsKnownEdge returns true if the graph source already knows of the passed
-// channel ID.
+// channel ID either as a live or zombie channel.
 //
 // NOTE: This method is part of the ChannelGraphSource interface.
 func (r *ChannelRouter) IsKnownEdge(chanID lnwire.ShortChannelID) bool {
@@ -2247,23 +2258,24 @@ func (r *ChannelRouter) IsKnownEdge(chanID lnwire.ShortChannelID) bool {
 }
 
 // IsStaleEdgePolicy returns true if the graph soruce has a channel edge for
-// the passed channel ID (and flags) that have a more recent timestamp.
+// the passed channel ID (and flags) that have a more recent timestamp. The
+// second bool returned is to denote whether the channel for which the edge
+// belongs to is considered a zombie channel.
 //
 // NOTE: This method is part of the ChannelGraphSource interface.
 func (r *ChannelRouter) IsStaleEdgePolicy(chanID lnwire.ShortChannelID,
-	timestamp time.Time, flags lnwire.ChanUpdateChanFlags) bool {
+	timestamp time.Time, flags lnwire.ChanUpdateChanFlags) (bool, bool) {
 
-	edge1Timestamp, edge2Timestamp, exists, _, err := r.cfg.Graph.HasChannelEdge(
-		chanID.ToUint64(),
-	)
+	edge1Timestamp, edge2Timestamp, exists, isZombie, err :=
+		r.cfg.Graph.HasChannelEdge(chanID.ToUint64())
 	if err != nil {
-		return false
+		return exists, isZombie
 	}
 
 	// If we don't know of the edge, then it means it's fresh (thus not
 	// stale).
 	if !exists {
-		return false
+		return false, false
 	}
 
 	// As edges are directional edge node has a unique policy for the
@@ -2275,13 +2287,34 @@ func (r *ChannelRouter) IsStaleEdgePolicy(chanID lnwire.ShortChannelID,
 	// A flag set of 0 indicates this is an announcement for the "first"
 	// node in the channel.
 	case flags&lnwire.ChanUpdateDirection == 0:
-		return !edge1Timestamp.Before(timestamp)
+		return !edge1Timestamp.Before(timestamp), false
 
 	// Similarly, a flag set of 1 indicates this is an announcement for the
 	// "second" node in the channel.
 	case flags&lnwire.ChanUpdateDirection == 1:
-		return !edge2Timestamp.Before(timestamp)
+		return !edge2Timestamp.Before(timestamp), false
 	}
 
-	return false
+	return false, false
+}
+
+// MarkEdgeZombie marks an edge as a zombie within our zombie index.
+//
+// NOTE: This method is part of the ChannelGraphSource interface.
+func (r *ChannelRouter) MarkEdgeZombie(chanID lnwire.ShortChannelID) error {
+	return r.cfg.Graph.MarkEdgeZombie(chanID.ToUint64())
+}
+
+// MarkEdgeLive clears an edge from our zombie index, deeming it as live.
+//
+// NOTE: This method is part of the ChannelGraphSource interface.
+func (r *ChannelRouter) MarkEdgeLive(chanID lnwire.ShortChannelID) error {
+	return r.cfg.Graph.MarkEdgeLive(chanID.ToUint64())
+}
+
+// IsZombieEdge returns whether the edge is considered zombie.
+//
+// NOTE: This method is part of the ChannelGraphSource interface.
+func (r *ChannelRouter) IsZombieEdge(chanID lnwire.ShortChannelID) bool {
+	return r.cfg.Graph.IsZombieEdge(chanID.ToUint64())
 }
