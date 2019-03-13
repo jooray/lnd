@@ -1966,6 +1966,107 @@ func TestRouterChansClosedOfflinePruneGraph(t *testing.T) {
 	}
 }
 
+// TestPruneChannelGraphDoubleDisabled test that we can properly prune channels
+// with both edges disabled from our channel graph.
+func TestPruneChannelGraphDoubleDisabled(t *testing.T) {
+	t.Parallel()
+
+	// For this test, we'll be creating three channels:
+	//   * The first will have *both* edges disabled.
+	//   * The second will *not* have any edges disabled.
+	//   * The third will have *one* edge disabled.
+	//
+	// With this setup, only the first will be pruned from the graph.
+	testChannels := []*testChannel{
+		symmetricTestChannel("a", "b", 100000, &testChannelPolicy{
+			Disabled: true,
+		}, 1),
+		symmetricTestChannel("b", "c", 100000, &testChannelPolicy{
+			Disabled: false,
+		}, 2),
+		symmetricTestChannel("c", "d", 100000, &testChannelPolicy{
+			Disabled: false,
+		}, 3),
+	}
+	testChannels[len(testChannels)-1].Node1.Disabled = true
+
+	// We'll create our test graph and router backed with these test
+	// channels we've created.
+	testGraph, err := createTestGraphFromChannels(testChannels)
+	if err != nil {
+		t.Fatalf("unable to create test graph: %v", err)
+	}
+	defer testGraph.cleanUp()
+
+	const startingHeight = 100
+	ctx, cleanUp, err := createTestCtxFromGraphInstance(
+		startingHeight, testGraph,
+	)
+	if err != nil {
+		t.Fatalf("unable to create test context: %v", err)
+	}
+	defer cleanUp()
+
+	// assertChannelExistence is a helper closure that ensures channels are
+	// properly pruned from the graph.
+	assertChannelExistence := func(channels ...uint64) {
+		t.Helper()
+
+		s := make(map[uint64]struct{}, len(channels))
+		for _, channel := range channels {
+			s[channel] = struct{}{}
+		}
+
+		for _, channel := range testChannels {
+			_, shouldExist := s[channel.ChannelID]
+
+			_, _, exist, _, err := ctx.router.cfg.Graph.HasChannelEdge(
+				channel.ChannelID,
+			)
+			if err != nil {
+				t.Fatalf("unable to determine existence of "+
+					"channel=%v in the graph: %v",
+					channel.ChannelID, err)
+			}
+			if shouldExist && !exist {
+				t.Fatalf("expected channel=%v to exist within "+
+					"the graph", channel.ChannelID)
+			}
+			if !shouldExist && exist {
+				t.Fatalf("expected channel=%v to not exist "+
+					"within the graph", channel.ChannelID)
+			}
+		}
+	}
+
+	// All of the channels we created above have a LastUpdate of `testTime`.
+	// To ensure these channels are not pruned because of the stale
+	// heuristic, we'll set the window to an hour before the existing
+	// LastUpdate.
+	ctx.router.cfg.ChannelPruneExpiry = time.Since(testTime.Add(-time.Hour))
+
+	// All the channels should exist within the graph before pruning them.
+	assertChannelExistence(1, 2, 3)
+
+	// If we attempt to prune them without AssumeChannelValid being set,
+	// none should be pruned.
+	if err := ctx.router.pruneZombieChans(); err != nil {
+		t.Fatalf("unable to prune zombie channels: %v", err)
+	}
+
+	assertChannelExistence(1, 2, 3)
+
+	// Now that AssumeChannelValid is set, we'll prune the graph again and
+	// the first channel should be the only one pruned.
+	ctx.router.cfg.AssumeChannelValid = true
+
+	if err := ctx.router.pruneZombieChans(); err != nil {
+		t.Fatalf("unable to prune zombie channels: %v", err)
+	}
+
+	assertChannelExistence(2, 3)
+}
+
 // TestFindPathFeeWeighting tests that the findPath method will properly prefer
 // routes with lower fees over routes with lower time lock values. This is
 // meant to exercise the fact that the internal findPath method ranks edges
