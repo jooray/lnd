@@ -1005,7 +1005,9 @@ func (p *peer) readHandler() {
 out:
 	for atomic.LoadInt32(&p.disconnect) == 0 {
 		nextMsg, err := p.readNextMessage()
-		idleTimer.Stop()
+		if !idleTimer.Stop() {
+			<-idleTimer.C
+		}
 		if err != nil {
 			peerLog.Infof("unable to read message from %v: %v",
 				p, err)
@@ -1429,16 +1431,38 @@ func (p *peer) writeMessage(msg lnwire.Message) error {
 func (p *peer) writeHandler() {
 	var exitErr error
 
+	const (
+		minRetryDelay = 5 * time.Second
+		maxRetryDelay = time.Minute
+	)
+
 out:
 	for {
 		select {
 		case outMsg := <-p.sendQueue:
-			switch outMsg.msg.(type) {
+			// Record the time at which we first attempt to send the
+			// message.
+			startTime := time.Now()
+
+			// Initialize a retry delay of zero, which will be
+			// increased if we encounter a write timeout on the
+			// send.
+			var retryDelay time.Duration
+		retryWithDelay:
+			if retryDelay > 0 {
+				select {
+				case <-time.After(retryDelay):
+				case <-p.quit:
+					exitErr = ErrPeerExiting
+					break out
+				}
+			}
+
 			// If we're about to send a ping message, then log the
 			// exact time in which we send the message so we can
 			// use the delay as a rough estimate of latency to the
 			// remote peer.
-			case *lnwire.Ping:
+			if _, ok := outMsg.msg.(*lnwire.Ping); ok {
 				// TODO(roasbeef): do this before the write?
 				// possibly account for processing within func?
 				now := time.Now().UnixNano()
@@ -1446,10 +1470,33 @@ out:
 			}
 
 			// Write out the message to the socket, responding with
-			// error if `errChan` is non-nil. The `errChan` allows
-			// callers to optionally synchronize sends with the
-			// writeHandler.
+			// error if `errChan` is non-nil and not a timeout
+			// error. The `errChan` allows callers to optionally
+			// synchronize sends with the writeHandler.
 			err := p.writeMessage(outMsg.msg)
+			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+				// Increase the retry delay in the event of a
+				// timeout error, this prevents us from
+				// disconnecting if the remote party is slow to
+				// pull messages off the wire. We back off
+				// exponentially up to our max delay to prevent
+				// blocking the write pool.
+				if retryDelay == 0 {
+					retryDelay = minRetryDelay
+				} else {
+					retryDelay *= 2
+					if retryDelay > maxRetryDelay {
+						retryDelay = maxRetryDelay
+					}
+				}
+
+				peerLog.Infof("Write timeout detected for "+
+					"peer %s, retrying after %v, "+
+					"first attempted %v ago", p.addr,
+					retryDelay, time.Since(startTime))
+
+				goto retryWithDelay
+			}
 			if outMsg.errChan != nil {
 				outMsg.errChan <- err
 			}
