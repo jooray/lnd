@@ -1009,12 +1009,14 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 
 		// Prior to processing the announcement we first check if we
 		// already know of this channel, if so, then we can exit early.
-		_, _, exists, err := r.cfg.Graph.HasChannelEdge(msg.ChannelID)
+		_, _, exists, _, err := r.cfg.Graph.HasChannelEdge(
+			msg.ChannelID,
+		)
 		if err != nil && err != channeldb.ErrGraphNoEdgesFound {
 			return errors.Errorf("unable to check for edge "+
 				"existence: %v", err)
 		} else if exists {
-			return newErrf(ErrIgnored, "Ignoring msg for known "+
+			return newErrf(ErrIgnored, "ignoring msg for known "+
 				"chan_id=%v", msg.ChannelID)
 		}
 
@@ -1130,9 +1132,8 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 		r.channelEdgeMtx.Lock(msg.ChannelID)
 		defer r.channelEdgeMtx.Unlock(msg.ChannelID)
 
-		edge1Timestamp, edge2Timestamp, exists, err := r.cfg.Graph.HasChannelEdge(
-			msg.ChannelID,
-		)
+		edge1Timestamp, edge2Timestamp, exists, _, err :=
+			r.cfg.Graph.HasChannelEdge(msg.ChannelID)
 		if err != nil && err != channeldb.ErrGraphNoEdgesFound {
 			return errors.Errorf("unable to check for edge "+
 				"existence: %v", err)
@@ -1142,7 +1143,7 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 		// If the channel doesn't exist in our database, we cannot
 		// apply the updated policy.
 		if !exists {
-			return newErrf(ErrIgnored, "Ignoring update "+
+			return newErrf(ErrIgnored, "ignoring update "+
 				"(flags=%v|%v) for unknown chan_id=%v",
 				msg.MessageFlags, msg.ChannelFlags,
 				msg.ChannelID)
@@ -2241,7 +2242,7 @@ func (r *ChannelRouter) IsPublicNode(node Vertex) (bool, error) {
 //
 // NOTE: This method is part of the ChannelGraphSource interface.
 func (r *ChannelRouter) IsKnownEdge(chanID lnwire.ShortChannelID) bool {
-	_, _, exists, _ := r.cfg.Graph.HasChannelEdge(chanID.ToUint64())
+	_, _, exists, _, _ := r.cfg.Graph.HasChannelEdge(chanID.ToUint64())
 	return exists
 }
 
@@ -2252,12 +2253,11 @@ func (r *ChannelRouter) IsKnownEdge(chanID lnwire.ShortChannelID) bool {
 func (r *ChannelRouter) IsStaleEdgePolicy(chanID lnwire.ShortChannelID,
 	timestamp time.Time, flags lnwire.ChanUpdateChanFlags) bool {
 
-	edge1Timestamp, edge2Timestamp, exists, err := r.cfg.Graph.HasChannelEdge(
+	edge1Timestamp, edge2Timestamp, exists, _, err := r.cfg.Graph.HasChannelEdge(
 		chanID.ToUint64(),
 	)
 	if err != nil {
 		return false
-
 	}
 
 	// If we don't know of the edge, then it means it's fresh (thus not

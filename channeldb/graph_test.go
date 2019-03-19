@@ -522,14 +522,14 @@ func TestDisconnectBlockAtHeight(t *testing.T) {
 	}
 
 	// The two first edges should be removed from the db.
-	_, _, has, err := graph.HasChannelEdge(edgeInfo.ChannelID)
+	_, _, has, _, err := graph.HasChannelEdge(edgeInfo.ChannelID)
 	if err != nil {
 		t.Fatalf("unable to query for edge: %v", err)
 	}
 	if has {
 		t.Fatalf("edge1 was not pruned from the graph")
 	}
-	_, _, has, err = graph.HasChannelEdge(edgeInfo2.ChannelID)
+	_, _, has, _, err = graph.HasChannelEdge(edgeInfo2.ChannelID)
 	if err != nil {
 		t.Fatalf("unable to query for edge: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestDisconnectBlockAtHeight(t *testing.T) {
 	}
 
 	// Edge 3 should not be removed.
-	_, _, has, err = graph.HasChannelEdge(edgeInfo3.ChannelID)
+	_, _, has, _, err = graph.HasChannelEdge(edgeInfo3.ChannelID)
 	if err != nil {
 		t.Fatalf("unable to query for edge: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestEdgeInfoUpdates(t *testing.T) {
 
 	// Check for existence of the edge within the database, it should be
 	// found.
-	_, _, found, err := graph.HasChannelEdge(chanID)
+	_, _, found, _, err := graph.HasChannelEdge(chanID)
 	if err != nil {
 		t.Fatalf("unable to query for edge: %v", err)
 	} else if !found {

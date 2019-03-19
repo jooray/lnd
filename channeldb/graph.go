@@ -587,17 +587,22 @@ func (c *ChannelGraph) addChannelEdge(tx *bbolt.Tx, edge *ChannelEdgeInfo) error
 	return chanIndex.Put(b.Bytes(), chanKey[:])
 }
 
-// HasChannelEdge returns true if the database knows of a channel edge with the
-// passed channel ID, and false otherwise. If an edge with that ID is found
-// within the graph, then two time stamps representing the last time the edge
-// was updated for both directed edges are returned along with the boolean.
-func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time, bool, error) {
+// HasChannelEdge returns true for the first boolean if the database knows of a
+// channel edge with the passed channel ID, and false otherwise. If an edge with
+// that ID is found within the graph, then two time stamps representing the last
+// time the edge was updated for both directed edges are returned along with the
+// boolean. If the edge doesn't exist, then the second boolean can be used to
+// determine whether the edge has been deemed as a zombie.
+func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time,
+	bool, bool, error) {
+
 	// TODO(roasbeef): check internal bloom filter first
 
 	var (
 		node1UpdateTime time.Time
 		node2UpdateTime time.Time
 		exists          bool
+		isZombie        bool
 	)
 
 	if err := c.db.View(func(tx *bbolt.Tx) error {
@@ -613,7 +618,15 @@ func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time, bool
 		var channelID [8]byte
 		byteOrder.PutUint64(channelID[:], chanID)
 		if edgeIndex.Get(channelID[:]) == nil {
-			exists = false
+			// If the edge doesn't exist, we'll also query for its
+			// existence in our zombie index.
+			zombieIndex := edges.Bucket(zombieBucket)
+			if zombieIndex == nil {
+				return nil
+			}
+
+			isZombie = isZombieEdge(zombieIndex, chanID)
+
 			return nil
 		}
 
@@ -644,10 +657,10 @@ func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time, bool
 
 		return nil
 	}); err != nil {
-		return time.Time{}, time.Time{}, exists, err
+		return time.Time{}, time.Time{}, exists, isZombie, err
 	}
 
-	return node1UpdateTime, node2UpdateTime, exists, nil
+	return node1UpdateTime, node2UpdateTime, exists, isZombie, nil
 }
 
 // UpdateChannelEdge retrieves and update edge of the graph database. Method
