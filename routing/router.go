@@ -633,7 +633,7 @@ func (r *ChannelRouter) syncGraphWithChain() error {
 // usually signals that a channel has been closed on-chain. We do this
 // periodically to keep a health, lively routing table.
 func (r *ChannelRouter) pruneZombieChans() error {
-	var chansToPrune []wire.OutPoint
+	var chansToPrune []*channeldb.ChannelEdgeInfo
 	chanExpiry := r.cfg.ChannelPruneExpiry
 
 	log.Infof("Examining channel graph for zombie channels")
@@ -707,7 +707,7 @@ func (r *ChannelRouter) pruneZombieChans() error {
 			info.ChannelPoint)
 
 		// TODO(roasbeef): add ability to delete single directional edge
-		chansToPrune = append(chansToPrune, info.ChannelPoint)
+		chansToPrune = append(chansToPrune, info)
 
 		// As we're detecting this as a zombie channel, we'll add this
 		// to the set of recently rejected items so we don't re-accept
@@ -734,10 +734,17 @@ func (r *ChannelRouter) pruneZombieChans() error {
 		log.Tracef("Pruning zombie channel with ChannelPoint(%v)",
 			chanToPrune)
 
-		err := r.cfg.Graph.DeleteChannelEdge(&chanToPrune)
+		err := r.cfg.Graph.MarkEdgeZombie(chanToPrune.ChannelID)
+		if err != nil {
+			return fmt.Errorf("unable to mark ChannelPoint(%v) "+
+				"as zombie: %v", chanToPrune.ChannelPoint, err)
+		}
+
+		err = r.cfg.Graph.DeleteChannelEdge(&chanToPrune.ChannelPoint)
 		if err != nil {
 			return fmt.Errorf("unable to prune zombie with "+
-				"ChannelPoint(%v): %v", chanToPrune, err)
+				"ChannelPoint(%v): %v",
+				chanToPrune.ChannelPoint, err)
 		}
 	}
 

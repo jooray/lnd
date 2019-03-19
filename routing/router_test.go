@@ -2008,7 +2008,7 @@ func TestPruneChannelGraphDoubleDisabled(t *testing.T) {
 	defer cleanUp()
 
 	// assertChannelExistence is a helper closure that ensures channels are
-	// properly pruned from the graph.
+	// properly pruned from the graph marked as zombies.
 	assertChannelExistence := func(channels ...uint64) {
 		t.Helper()
 
@@ -2020,7 +2020,7 @@ func TestPruneChannelGraphDoubleDisabled(t *testing.T) {
 		for _, channel := range testChannels {
 			_, shouldExist := s[channel.ChannelID]
 
-			_, _, exist, _, err := ctx.router.cfg.Graph.HasChannelEdge(
+			_, _, exist, isZombie, err := ctx.router.cfg.Graph.HasChannelEdge(
 				channel.ChannelID,
 			)
 			if err != nil {
@@ -2035,6 +2035,14 @@ func TestPruneChannelGraphDoubleDisabled(t *testing.T) {
 			if !shouldExist && exist {
 				t.Fatalf("expected channel=%v to not exist "+
 					"within the graph", channel.ChannelID)
+			}
+			if shouldExist && isZombie {
+				t.Fatalf("expected existent channel=%v to not "+
+					"be a zombie", channel.ChannelID)
+			}
+			if !shouldExist && !isZombie {
+				t.Fatalf("expected non-existent channel=%v to "+
+					"be a zombie", channel.ChannelID)
 			}
 		}
 	}
