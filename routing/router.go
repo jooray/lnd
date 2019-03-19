@@ -203,8 +203,7 @@ type Config struct {
 
 	// AssumeChannelValid toggles whether or not the router will check for
 	// spentness of channel outpoints. For neutrino, this saves long rescans
-	// from blocking initial usage of the wallet. This should only be
-	// enabled on testnet.
+	// from blocking initial usage of the daemon.
 	AssumeChannelValid bool
 }
 
@@ -396,26 +395,15 @@ func (r *ChannelRouter) Start() error {
 
 	log.Tracef("Channel Router starting")
 
-	// First, we'll start the chain view instance (if it isn't already
-	// started).
-	if err := r.cfg.ChainView.Start(); err != nil {
-		return err
-	}
-
-	// Once the instance is active, we'll fetch the channel we'll receive
-	// notifications over.
-	r.newBlocks = r.cfg.ChainView.FilteredBlocks()
-	r.staleBlocks = r.cfg.ChainView.DisconnectedBlocks()
-
 	bestHash, bestHeight, err := r.cfg.Chain.GetBestBlock()
 	if err != nil {
 		return err
 	}
 
+	// If the graph has never been pruned, or hasn't fully been created yet,
+	// then we don't treat this as an explicit error.
 	if _, _, err := r.cfg.Graph.PruneTip(); err != nil {
 		switch {
-		// If the graph has never been pruned, or hasn't fully been
-		// created yet, then we don't treat this as an explicit error.
 		case err == channeldb.ErrGraphNeverPruned:
 			fallthrough
 		case err == channeldb.ErrGraphNotFound:
@@ -432,6 +420,30 @@ func (r *ChannelRouter) Start() error {
 			return err
 		}
 	}
+
+	// If AssumeChannelValid is present, then we won't rely on pruning
+	// channels from the graph based on their spentness, but whether they
+	// are considered zombies or not.
+	if r.cfg.AssumeChannelValid {
+		if err := r.pruneZombieChans(); err != nil {
+			return err
+		}
+
+		r.wg.Add(1)
+		go r.networkHandler()
+		return nil
+	}
+
+	// Otherwise, we'll use our filtered chain view to prune channels as
+	// soon as they are detected as spent on-chain.
+	if err := r.cfg.ChainView.Start(); err != nil {
+		return err
+	}
+
+	// Once the instance is active, we'll fetch the channel we'll receive
+	// notifications over.
+	r.newBlocks = r.cfg.ChainView.FilteredBlocks()
+	r.staleBlocks = r.cfg.ChainView.DisconnectedBlocks()
 
 	// Before we perform our manual block pruning, we'll construct and
 	// apply a fresh chain filter to the active FilteredChainView instance.
@@ -480,10 +492,14 @@ func (r *ChannelRouter) Stop() error {
 		return nil
 	}
 
-	log.Infof("Channel Router shutting down")
+	log.Tracef("Channel Router shutting down")
 
-	if err := r.cfg.ChainView.Stop(); err != nil {
-		return err
+	// Our filtered chain view could've only been started if
+	// AssumeChannelValid isn't present.
+	if !r.cfg.AssumeChannelValid {
+		if err := r.cfg.ChainView.Stop(); err != nil {
+			return err
+		}
 	}
 
 	close(r.quit)
@@ -577,9 +593,9 @@ func (r *ChannelRouter) syncGraphWithChain() error {
 	log.Infof("Syncing channel graph from height=%v (hash=%v) to height=%v "+
 		"(hash=%v)", pruneHeight, pruneHash, bestHeight, bestHash)
 
-	// If we're not yet caught up, then we'll walk forward in the chain in
-	// the chain pruning the channel graph with each new block in the chain
-	// that hasn't yet been consumed by the channel graph.
+	// If we're not yet caught up, then we'll walk forward in the chain
+	// pruning the channel graph with each new block that hasn't yet been
+	// consumed by the channel graph.
 	var numChansClosed uint32
 	for nextHeight := pruneHeight + 1; nextHeight <= uint32(bestHeight); nextHeight++ {
 		// Using the next height, request a manual block pruning from
