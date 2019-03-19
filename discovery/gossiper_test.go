@@ -696,6 +696,7 @@ func createTestCtx(startHeight uint32) (*testCtx, func(), error) {
 		ProofMatureDelta:  proofMatureDelta,
 		WaitingProofStore: waitingProofStore,
 		MessageStore:      newMockMessageStore(),
+		LiveEdgeHorizon:   routing.DefaultChannelPruneExpiry,
 	}, nodeKeyPub1)
 
 	if err := gossiper.Start(); err != nil {
@@ -1535,6 +1536,7 @@ func TestSignatureAnnouncementRetryAtStartup(t *testing.T) {
 		ProofMatureDelta:  proofMatureDelta,
 		WaitingProofStore: ctx.gossiper.cfg.WaitingProofStore,
 		MessageStore:      ctx.gossiper.cfg.MessageStore,
+		LiveEdgeHorizon:   ctx.gossiper.cfg.LiveEdgeHorizon,
 	}, ctx.gossiper.selfKey)
 	if err != nil {
 		t.Fatalf("unable to recreate gossiper: %v", err)
@@ -2193,6 +2195,233 @@ func TestForwardPrivateNodeAnnouncement(t *testing.T) {
 	case <-ctx.broadcastedMessage:
 	case <-time.After(2 * trickleDelay):
 		t.Fatal("gossiper should have broadcast the node announcement")
+	}
+}
+
+// TestRejectZombieEdge ensures that we properly reject any announcements for
+// zombie edges.
+func TestRejectZombieEdge(t *testing.T) {
+	t.Parallel()
+
+	// We'll start by creating our test context with a batch of
+	// announcements.
+	ctx, cleanup, err := createTestCtx(0)
+	if err != nil {
+		t.Fatalf("unable to create test context: %v", err)
+	}
+	defer cleanup()
+
+	batch, err := createAnnouncements(0)
+	if err != nil {
+		t.Fatalf("unable to create announcements: %v", err)
+	}
+	remotePeer := &mockPeer{pk: nodeKeyPriv2.PubKey()}
+
+	// processAnnouncements is a helper closure we'll use to test that we
+	// properly process/reject announcements based on whether they're for a
+	// zombie edge or not.
+	processAnnouncements := func(isZombie bool) {
+		t.Helper()
+
+		errChan := ctx.gossiper.ProcessRemoteAnnouncement(
+			batch.remoteChanAnn, remotePeer,
+		)
+		select {
+		case err := <-errChan:
+			if isZombie && err != nil {
+				t.Fatalf("expected to reject live channel "+
+					"announcement with nil error: %v", err)
+			}
+			if !isZombie && err != nil {
+				t.Fatalf("expected to process live channel "+
+					"announcement: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("expected to process channel announcement")
+		}
+		select {
+		case <-ctx.broadcastedMessage:
+			if isZombie {
+				t.Fatal("expected to not broadcast zombie " +
+					"channel announcement")
+			}
+		case <-time.After(2 * trickleDelay):
+			if !isZombie {
+				t.Fatal("expected to broadcast live channel " +
+					"announcement")
+			}
+		}
+
+		errChan = ctx.gossiper.ProcessRemoteAnnouncement(
+			batch.chanUpdAnn2, remotePeer,
+		)
+		select {
+		case err := <-errChan:
+			if isZombie && err != nil {
+				t.Fatalf("expected to reject zombie channel "+
+					"update with nil error: %v", err)
+			}
+			if !isZombie && err != nil {
+				t.Fatalf("expected to process live channel "+
+					"update: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("expected to process channel update")
+		}
+		select {
+		case <-ctx.broadcastedMessage:
+			if isZombie {
+				t.Fatal("expected to not broadcast zombie " +
+					"channel update")
+			}
+		case <-time.After(2 * trickleDelay):
+			if !isZombie {
+				t.Fatal("expected to broadcast live channel " +
+					"update")
+			}
+		}
+	}
+
+	// We'll mark the edge for which we'll process announcements for as a
+	// zombie within the router. This should reject any announcements for
+	// this edge while it remains as a zombie.
+	chanID := batch.remoteChanAnn.ShortChannelID
+	if err := ctx.router.MarkEdgeZombie(chanID); err != nil {
+		t.Fatalf("unable mark channel %v as zombie: %v", chanID, err)
+	}
+
+	processAnnouncements(true)
+
+	// If we then mark the edge as live, the edge's zombie status should be
+	// overridden and the announcements should be processed.
+	if err := ctx.router.MarkEdgeLive(chanID); err != nil {
+		t.Fatalf("unable mark channel %v as zombie: %v", chanID, err)
+	}
+
+	processAnnouncements(false)
+}
+
+// TestProcessZombieEdgeNowLive ensures that we can detect when a zombie edge
+// becomes live by receiving a fresh update.
+func TestProcessZombieEdgeNowLive(t *testing.T) {
+	t.Parallel()
+
+	// We'll start by creating our test context with a batch of
+	// announcements.
+	ctx, cleanup, err := createTestCtx(0)
+	if err != nil {
+		t.Fatalf("unable to create test context: %v", err)
+	}
+	defer cleanup()
+
+	batch, err := createAnnouncements(0)
+	if err != nil {
+		t.Fatalf("unable to create announcements: %v", err)
+	}
+	remotePrivKey := nodeKeyPriv2
+	remotePeer := &mockPeer{pk: remotePrivKey.PubKey()}
+
+	// processAnnouncement is a helper closure we'll use to ensure an
+	// announcement is properly processed/rejected based on whether the edge
+	// is a zombie or not.
+	processAnnouncement := func(ann lnwire.Message, isZombie bool) {
+		t.Helper()
+
+		errChan := ctx.gossiper.ProcessRemoteAnnouncement(
+			ann, remotePeer,
+		)
+		select {
+		case err := <-errChan:
+			if isZombie && err != nil {
+				t.Fatalf("expected to reject zombie channel "+
+					"update: %v", err)
+			}
+			if !isZombie && err != nil {
+				t.Fatalf("expected to process live channel "+
+					"update: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("expected to process announcement")
+		}
+		select {
+		case <-ctx.broadcastedMessage:
+			if isZombie {
+				t.Fatal("expected to not broadcast zombie " +
+					"channel update")
+			}
+		case <-time.After(2 * trickleDelay):
+			if !isZombie {
+				t.Fatal("expected to broadcast live channel " +
+					"update")
+			}
+		}
+	}
+
+	// We'll generate a channel update with a timestamp far enough in the
+	// past to consider it a zombie.
+	zombieTimestamp := time.Now().Add(-ctx.gossiper.cfg.LiveEdgeHorizon)
+	batch.chanUpdAnn2.Timestamp = uint32(zombieTimestamp.Unix())
+	if err := signUpdate(remotePrivKey, batch.chanUpdAnn2); err != nil {
+		t.Fatalf("unable to sign update with new timestamp: %v", err)
+	}
+
+	// We'll also add the edge to our zombie index.
+	chanID := batch.remoteChanAnn.ShortChannelID
+	if err := ctx.router.MarkEdgeZombie(chanID); err != nil {
+		t.Fatalf("unable mark channel %v as zombie: %v", chanID, err)
+	}
+
+	// Attempting to process the current channel update should fail due to
+	// its edge being considered a zombie and its timestamp not being within
+	// the live horizon.
+	processAnnouncement(batch.chanUpdAnn2, true)
+
+	// Now we'll generate a new update with a fresh timestamp. This should
+	// allow the channel update to be processed even though it is still
+	// marked as a zombie within the index, since it is a fresh new update.
+	batch.chanUpdAnn2.Timestamp = uint32(time.Now().Unix())
+	if err := signUpdate(remotePrivKey, batch.chanUpdAnn2); err != nil {
+		t.Fatalf("unable to sign update with new timestamp: %v", err)
+	}
+
+	// The channel update cannot be successfully processed and broadcast
+	// until the channel announcement is. Since the channel update indicates
+	// a fresh new update, the gossiper should stash it until it sees the
+	// corresponding channel announcement. We'll give it some time to do
+	// this due to the asynchronous nature of the gossiper.
+	updateErrChan := ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.chanUpdAnn2, remotePeer,
+	)
+
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("expected to not broadcast live channel update " +
+			"without announcement")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	time.Sleep(time.Second)
+
+	// We'll go ahead and process the channel announcement to ensure the
+	// channel update is processed thereafter.
+	processAnnouncement(batch.remoteChanAnn, false)
+
+	// After successfully processing the announcement, the channel update
+	// should have been processed and broadcast successfully as well.
+	select {
+	case err := <-updateErrChan:
+		if err != nil {
+			t.Fatalf("expected to process live channel update: %v",
+				err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected to process announcement")
+	}
+
+	select {
+	case <-ctx.broadcastedMessage:
+	case <-time.After(2 * trickleDelay):
+		t.Fatal("expected to broadcast live channel update")
 	}
 }
 

@@ -648,6 +648,7 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		WaitingProofStore: waitingProofStore,
 		MessageStore:      gossipMessageStore,
 		AnnSigner:         s.nodeSigner,
+		LiveEdgeHorizon:   routing.DefaultChannelPruneExpiry,
 	},
 		s.identityPriv.PubKey(),
 	)

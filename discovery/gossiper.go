@@ -143,6 +143,14 @@ type Config struct {
 	// TODO(roasbeef): extract ann crafting + sign from fundingMgr into
 	// here?
 	AnnSigner lnwallet.MessageSigner
+
+	// LiveEdgeHorizon is the horizon used to determine if an edge is
+	// considered zombie or not. If the delta between now and when the
+	// edge was last updated is greater than LiveEdgeHorizon, then the
+	// edge is considered zombie.
+	//
+	// NOTE: This should match the zombie horizon used by the router.
+	LiveEdgeHorizon time.Duration
 }
 
 // AuthenticatedGossiper is a subsystem which is responsible for receiving
@@ -1571,8 +1579,9 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 			return nil
 		}
 
-		// At this point, we'll now ask the router if this is a stale
-		// update. If so we can skip all the processing below.
+		// At this point, we'll now ask the router if this is a
+		// zombie/known edge. If so we can skip all the processing
+		// below.
 		if d.cfg.Router.IsKnownEdge(msg.ShortChannelID) {
 			nMsg.err <- nil
 			return nil
@@ -1787,16 +1796,34 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 		}
 
 		// Before we perform any of the expensive checks below, we'll
-		// make sure that the router doesn't already have a fresher
-		// announcement for this edge.
+		// check whether this update is stale or is for a zombie
+		// channel in order to quickly reject it. If the update is for a
+		// zombie channel, then we'll only ignore it if the update is
+		// not within our LiveEdgeHorizon.
 		timestamp := time.Unix(int64(msg.Timestamp), 0)
-		isStale, _ := d.cfg.Router.IsStaleEdgePolicy(
+		isStale, isZombie := d.cfg.Router.IsStaleEdgePolicy(
 			msg.ShortChannelID, timestamp, msg.ChannelFlags,
 		)
-		if isStale {
-
+		isStaleUpdate := time.Since(timestamp) > d.cfg.LiveEdgeHorizon
+		if isStale || (isZombie && isStaleUpdate) {
 			nMsg.err <- nil
 			return nil
+		}
+
+		// If the we've previously deemed the channel for this update a
+		// zombie and we came across a fresh update, then we'll mark it
+		// as live to ensure we can process any future updates for this
+		// edge until it is considered zombie again.
+		if isZombie {
+			err := d.cfg.Router.MarkEdgeLive(msg.ShortChannelID)
+			if err != nil {
+				log.Errorf("Unable to remove edge with "+
+					"chan_id=%v from zombie index: %v",
+					msg.ShortChannelID, err)
+			} else {
+				log.Debugf("Removed edge with chan_id=%v from "+
+					"zombie index", msg.ShortChannelID)
+			}
 		}
 
 		// Get the node pub key as far as we don't have it in channel
