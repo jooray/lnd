@@ -262,6 +262,10 @@ type gossipSyncer struct {
 	// number of queries.
 	rateLimiter *rate.Limiter
 
+	// syncedSignal is a channel that, if set, will be closed when the
+	// gossipSyncer reaches its terminal chansSynced state.
+	syncedSignal chan struct{}
+
 	sync.Mutex
 
 	quit chan struct{}
@@ -468,6 +472,13 @@ func (g *gossipSyncer) channelGraphSyncer() {
 		// This is our final terminal state where we'll only reply to
 		// any further queries by the remote peer.
 		case chansSynced:
+			g.Lock()
+			if g.syncedSignal != nil {
+				close(g.syncedSignal)
+				g.syncedSignal = nil
+			}
+			g.Unlock()
+
 			// If we haven't yet sent out our update horizon, and
 			// we want to receive real-time channel updates, we'll
 			// do so now.
@@ -1124,4 +1135,22 @@ func (g *gossipSyncer) SyncState() syncerState {
 // SyncType returns the current syncerType of the target gossipSyncer.
 func (g *gossipSyncer) SyncType() syncerType {
 	return syncerType(atomic.LoadUint32(&g.syncType))
+}
+
+// ResetSyncedSignal returns a channel that will be closed in order to serve as
+// a signal for when the gossipSyncer has reached its chansSynced state.
+func (g *gossipSyncer) ResetSyncedSignal() chan struct{} {
+	g.Lock()
+	defer g.Unlock()
+
+	syncedSignal := make(chan struct{})
+
+	syncState := syncerState(atomic.LoadUint32(&g.state))
+	if syncState == chansSynced {
+		close(syncedSignal)
+		return syncedSignal
+	}
+
+	g.syncedSignal = syncedSignal
+	return g.syncedSignal
 }

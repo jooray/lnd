@@ -2172,3 +2172,53 @@ func TestGossipSyncerSyncTransitions(t *testing.T) {
 		})
 	}
 }
+
+// TestGossipSyncerSyncedSignal ensures that we receive a signal when a gossip
+// syncer reaches its terminal chansSynced state.
+func TestGossipSyncerSyncedSignal(t *testing.T) {
+	t.Parallel()
+
+	// We'll create a new gossip syncer and manually override its state to
+	// chansSynced.
+	_, syncer, _ := newTestSyncer(
+		lnwire.NewShortChanIDFromInt(10), defaultEncoding,
+		defaultChunkSize,
+	)
+	syncer.state = uint32(chansSynced)
+
+	// We'll go ahead and request a signal to be notified of when it reaches
+	// this state.
+	signalChan := syncer.ResetSyncedSignal()
+
+	// Starting the gossip syncer should cause the signal to be delivered.
+	syncer.Start()
+
+	select {
+	case <-signalChan:
+	case <-time.After(time.Second):
+		t.Fatal("expected to receive chansSynced signal")
+	}
+
+	syncer.Stop()
+
+	// We'll try this again, but this time we'll request the signal after
+	// the syncer is active and has already reached its chansSynced state.
+	_, syncer, _ = newTestSyncer(
+		lnwire.NewShortChanIDFromInt(10), defaultEncoding,
+		defaultChunkSize,
+	)
+
+	syncer.state = uint32(chansSynced)
+
+	syncer.Start()
+	defer syncer.Stop()
+
+	signalChan = syncer.ResetSyncedSignal()
+
+	// The signal should be delivered immediately.
+	select {
+	case <-signalChan:
+	case <-time.After(time.Second):
+		t.Fatal("expected to receive chansSynced signal")
+	}
+}
