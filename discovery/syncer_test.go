@@ -13,7 +13,9 @@ import (
 )
 
 const (
-	defaultEncoding = lnwire.EncodingSortedPlain
+	defaultEncoding   = lnwire.EncodingSortedPlain
+	latestKnownHeight = 1337
+	startHeight       = latestKnownHeight - chanRangeQueryBuffer
 )
 
 var (
@@ -732,16 +734,31 @@ func TestGossipSyncerGenChanRangeQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to resp: %v", err)
 	}
-
 	firstHeight := uint32(startingHeight - chanRangeQueryBuffer)
 	if rangeQuery.FirstBlockHeight != firstHeight {
 		t.Fatalf("incorrect chan range query: expected %v, %v",
-			rangeQuery.FirstBlockHeight,
-			startingHeight-chanRangeQueryBuffer)
+			startingHeight-chanRangeQueryBuffer,
+			rangeQuery.FirstBlockHeight)
 	}
 	if rangeQuery.NumBlocks != math.MaxUint32-firstHeight {
 		t.Fatalf("wrong num blocks: expected %v, got %v",
-			rangeQuery.NumBlocks, math.MaxUint32-firstHeight)
+			math.MaxUint32-firstHeight, rangeQuery.NumBlocks)
+	}
+
+	// If the syncer must perform a full sync, then generating a range query
+	// should result in a start height of 0.
+	syncer.syncType = uint32(fullSync)
+	rangeQuery, err = syncer.genChanRangeQuery()
+	if err != nil {
+		t.Fatalf("unable to resp: %v", err)
+	}
+	if rangeQuery.FirstBlockHeight != 0 {
+		t.Fatalf("incorrect chan range query: expected %v, %v", 0,
+			rangeQuery.FirstBlockHeight)
+	}
+	if rangeQuery.NumBlocks != math.MaxUint32 {
+		t.Fatalf("wrong num blocks: expected %v, got %v",
+			math.MaxUint32, rangeQuery.NumBlocks)
 	}
 }
 
@@ -1938,5 +1955,220 @@ func TestGossipSyncerAlreadySynced(t *testing.T) {
 
 			}
 		}
+	}
+}
+
+// TestGossipSyncerSyncTransitions ensures that the gossip syncer properly
+// carries out its duties when accepting a new sync transition request.
+func TestGossipSyncerSyncTransitions(t *testing.T) {
+	t.Parallel()
+
+	assertMsgSent := func(t *testing.T, msgChan chan []lnwire.Message,
+		msg lnwire.Message) {
+
+		t.Helper()
+
+		var msgRecv lnwire.Message
+		select {
+		case msgsRecv := <-msgChan:
+			if len(msgsRecv) != 1 {
+				t.Fatal("expected to receive a single message "+
+					"at a time, got %d", len(msgsRecv))
+			}
+			msgRecv = msgsRecv[0]
+		case <-time.After(time.Second):
+			t.Fatalf("expected to receive %T message", msg)
+		}
+
+		if !reflect.DeepEqual(msgRecv, msg) {
+			t.Fatalf("expected to receive message: %v\ngot: %v",
+				spew.Sdump(msg), spew.Sdump(msgRecv))
+		}
+	}
+
+	tests := []struct {
+		name          string
+		entrySyncType syncerType
+		finalSyncType syncerType
+		assert        func(t *testing.T, msgChan chan []lnwire.Message,
+			syncer *gossipSyncer)
+	}{
+		{
+			name:          "active to passive",
+			entrySyncType: activeSync,
+			finalSyncType: passiveSync,
+			assert: func(t *testing.T, msgChan chan []lnwire.Message,
+				g *gossipSyncer) {
+
+				// When transitioning from active to passive, we
+				// should expect to see a new local update
+				// horizon sent to the remote peer indicating
+				// that it would not like to receive any future
+				// updates.
+				assertMsgSent(t, msgChan, &lnwire.GossipTimestampRange{
+					FirstTimestamp: 0,
+					TimestampRange: 0,
+				})
+
+				if syncerState(g.state) != chansSynced {
+					t.Fatalf("expected syncerState %v, "+
+						"got %v", chansSynced,
+						syncerState(g.state))
+				}
+			},
+		},
+		{
+			name:          "full to passive",
+			entrySyncType: fullSync,
+			finalSyncType: passiveSync,
+			assert: func(t *testing.T, _ chan []lnwire.Message,
+				g *gossipSyncer) {
+
+				// When transitioning from full to passive, we
+				// don't expect anything to happen other than
+				// the syncer to remain in its chansSynced state
+				// as it already can't receive any future
+				// updates from the remote peer.
+				if syncerState(g.state) != chansSynced {
+					t.Fatalf("expected syncerState %v, "+
+						"got %v", chansSynced,
+						syncerState(g.state))
+				}
+			},
+		},
+		{
+			name:          "active to full",
+			entrySyncType: activeSync,
+			finalSyncType: fullSync,
+			assert: func(t *testing.T, msgChan chan []lnwire.Message,
+				g *gossipSyncer) {
+
+				// When transitioning from active to full, we
+				// should expect to see a QueryChannelRange sent
+				// to the remote peer requesting all channels it
+				// knows of from the genesis block.
+				assertMsgSent(t, msgChan, &lnwire.QueryChannelRange{
+					FirstBlockHeight: 0,
+					NumBlocks:        math.MaxUint32,
+				})
+
+				if syncerState(g.state) != waitingQueryRangeReply {
+					t.Fatalf("expected syncerState %v, "+
+						"got %v", waitingQueryRangeReply,
+						syncerState(g.state))
+				}
+			},
+		},
+		{
+			name:          "passive to full",
+			entrySyncType: passiveSync,
+			finalSyncType: fullSync,
+			assert: func(t *testing.T, msgChan chan []lnwire.Message,
+				g *gossipSyncer) {
+
+				// When transitioning from passive to full, we
+				// should expect to see a QueryChannelRange sent
+				// to the remote peer requesting all channels it
+				// knows of from the genesis block.
+				assertMsgSent(t, msgChan, &lnwire.QueryChannelRange{
+					FirstBlockHeight: 0,
+					NumBlocks:        math.MaxUint32,
+				})
+
+				if syncerState(g.state) != waitingQueryRangeReply {
+					t.Fatalf("expected syncerState %v, "+
+						"got %v", waitingQueryRangeReply,
+						syncerState(g.state))
+				}
+			},
+		},
+		{
+			name:          "passive to active",
+			entrySyncType: passiveSync,
+			finalSyncType: activeSync,
+			assert: func(t *testing.T, msgChan chan []lnwire.Message,
+				g *gossipSyncer) {
+
+				// When transitioning from passive to active, we
+				// should expect to see a QueryChannelRange sent
+				// to the remote peer requesting all channels it
+				// knows of from the highest height the syncer
+				// knows of.
+				assertMsgSent(t, msgChan, &lnwire.QueryChannelRange{
+					FirstBlockHeight: startHeight,
+					NumBlocks:        math.MaxUint32 - startHeight,
+				})
+
+				if syncerState(g.state) != waitingQueryRangeReply {
+					t.Fatalf("expected syncerState %v, "+
+						"got %v", waitingQueryRangeReply,
+						syncerState(g.state))
+				}
+			},
+		},
+		{
+			name:          "full to active",
+			entrySyncType: fullSync,
+			finalSyncType: activeSync,
+			assert: func(t *testing.T, msgChan chan []lnwire.Message,
+				g *gossipSyncer) {
+
+				// When transitioning from full to active, we
+				// should expect to see a new local update
+				// horizon sent to the remote peer indicating
+				// that it would like to receive any future
+				// updates.
+				firstTimestamp := uint32(time.Now().Unix())
+				assertMsgSent(t, msgChan, &lnwire.GossipTimestampRange{
+					FirstTimestamp: firstTimestamp,
+					TimestampRange: math.MaxUint32,
+				})
+
+				if syncerState(g.state) != chansSynced {
+					t.Fatalf("expected syncerState %v, "+
+						"got %v", chansSynced,
+						syncerState(g.state))
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			// We'll start each test by creating our syncer. We'll
+			// initialize it with a state of chansSynced, as that's
+			// the only time when it can process sync transitions.
+			msgChan, syncer, _ := newTestSyncer(
+				lnwire.ShortChannelID{
+					BlockHeight: latestKnownHeight,
+				},
+				defaultEncoding, defaultChunkSize,
+			)
+			syncer.state = uint32(chansSynced)
+
+			// We'll set the intiial syncType to what the test demands.
+			syncer.syncType = uint32(test.entrySyncType)
+
+			// Then, we'll start the syncer in order to process the
+			// request and stop it right after.
+			syncer.Start()
+			syncer.ProcessSyncTransition(test.finalSyncType)
+			syncer.Stop()
+
+			// The syncer should now have the expected final
+			// syncerType that the test expects.
+			if syncerType(syncer.syncType) != test.finalSyncType {
+				t.Fatalf("expected syncType %v, got %v",
+					test.finalSyncType,
+					syncerType(syncer.syncType))
+			}
+
+			// Finally, we'll run a set of assertions for each test
+			// to ensure the syncer performed its expected duties
+			// after processing its sync transition.
+			test.assert(t, msgChan, syncer)
+		})
 	}
 }

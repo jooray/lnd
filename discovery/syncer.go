@@ -28,6 +28,13 @@ const (
 	//   2. Should respond to queries from the remote peer.
 	//   3. Should not receive new updates from the remote peer.
 	passiveSync
+
+	// fullSync denotes that a gossip syncer:
+	//   1. Should force a sync from the earliest height known in the
+	//   chain with the remote peer.
+	//   2. Should respond to queries from the remote peer.
+	//   3. Should not receive new updates from the remote peer.
+	fullSync
 )
 
 // String returns a human readable string describing the target syncerType.
@@ -37,6 +44,8 @@ func (t syncerType) String() string {
 		return "activeSync"
 	case passiveSync:
 		return "passiveSync"
+	case fullSync:
+		return "fullSync"
 	default:
 		return fmt.Sprintf("unknown sync type %d", t)
 	}
@@ -83,17 +92,6 @@ const (
 	chansSynced
 )
 
-const (
-	// DefaultMaxUndelayedQueryReplies specifies how many gossip queries we
-	// will respond to immediately before starting to delay responses.
-	DefaultMaxUndelayedQueryReplies = 10
-
-	// DefaultDelayedQueryReplyInterval is the length of time we will wait
-	// before responding to gossip queries after replying to
-	// maxUndelayedQueryReplies queries.
-	DefaultDelayedQueryReplyInterval = 5 * time.Second
-)
-
 // String returns a human readable string describing the target syncerState.
 func (s syncerState) String() string {
 	switch s {
@@ -117,6 +115,26 @@ func (s syncerState) String() string {
 	}
 }
 
+const (
+	// DefaultMaxUndelayedQueryReplies specifies how many gossip queries we
+	// will respond to immediately before starting to delay responses.
+	DefaultMaxUndelayedQueryReplies = 10
+
+	// DefaultDelayedQueryReplyInterval is the length of time we will wait
+	// before responding to gossip queries after replying to
+	// maxUndelayedQueryReplies queries.
+	DefaultDelayedQueryReplyInterval = 5 * time.Second
+
+	// chanRangeQueryBuffer is the number of blocks back that we'll go when
+	// asking the remote peer for their any channels they know of beyond
+	// our highest known channel ID.
+	chanRangeQueryBuffer = 144
+
+	// syncTransitionTimeout is the default timeout in which we'll wait up
+	// to when attempting to perform a sync transition.
+	syncTransitionTimeout = 5 * time.Second
+)
+
 var (
 	// encodingTypeToChunkSize maps an encoding type, to the max number of
 	// short chan ID's using the encoding type that we can fit into a
@@ -127,14 +145,22 @@ var (
 
 	// ErrGossipSyncerExiting signals that the syncer has been killed.
 	ErrGossipSyncerExiting = errors.New("gossip syncer exiting")
+
+	// ErrSyncTransitionTimeout is an error returned when we've timed out
+	// attempting to perform a sync transition.
+	ErrSyncTransitionTimeout = errors.New("timed out attempting to " +
+		"transition sync type")
+
+	// zeroTimestamp is the timestamp we'll use when we want to indicate to
+	// peers that we do not want to receive any new graph updates.
+	zeroTimestamp = time.Unix(0, 0)
 )
 
-const (
-	// chanRangeQueryBuffer is the number of blocks back that we'll go when
-	// asking the remote peer for their any channels they know of beyond
-	// our highest known channel ID.
-	chanRangeQueryBuffer = 144
-)
+// syncTransitionReq encapsulates a request for a gossip syncer sync transition.
+type syncTransitionReq struct {
+	newSyncType syncerType
+	errChan     chan error
+}
 
 // gossipSyncerCfg is a struct that packages all the information a gossipSyncer
 // needs to carry out its duties.
@@ -209,6 +235,12 @@ type gossipSyncer struct {
 	// NOTE: This variable MUST be used atomically.
 	syncType uint32
 
+	// syncTransitions is a channel through which new sync type transition
+	// requests will be sent through. These requests should only be handled
+	// when the gossip syncer is in a chansSynced state to ensure its state
+	// machine behaves as expected.
+	syncTransitions chan *syncTransitionReq
+
 	// gossipMsgs is a channel that all messages from the target peer will
 	// be sent over.
 	gossipMsgs chan lnwire.Message
@@ -261,10 +293,11 @@ func newGossipSyncer(cfg gossipSyncerCfg) *gossipSyncer {
 	)
 
 	return &gossipSyncer{
-		cfg:         cfg,
-		rateLimiter: rateLimiter,
-		gossipMsgs:  make(chan lnwire.Message, 100),
-		quit:        make(chan struct{}),
+		cfg:             cfg,
+		rateLimiter:     rateLimiter,
+		syncTransitions: make(chan *syncTransitionReq),
+		gossipMsgs:      make(chan lnwire.Message, 100),
+		quit:            make(chan struct{}),
 	}
 }
 
@@ -302,10 +335,6 @@ func (g *gossipSyncer) Stop() error {
 // send them messages which actually pass their defined update horizon.
 func (g *gossipSyncer) channelGraphSyncer() {
 	defer g.wg.Done()
-
-	// TODO(roasbeef): also add ability to force transition back to syncing
-	// chans
-	//  * needed if we want to sync chan state very few blocks?
 
 	for {
 		state := atomic.LoadUint32(&g.state)
@@ -444,25 +473,19 @@ func (g *gossipSyncer) channelGraphSyncer() {
 			// do so now.
 			syncType := syncerType(atomic.LoadUint32(&g.syncType))
 			if g.localUpdateHorizon == nil && syncType == activeSync {
-				updateHorizon := time.Now()
-				log.Infof("gossipSyncer(%x): applying "+
-					"gossipFilter(start=%v)",
-					g.cfg.peerPub[:], updateHorizon)
-
-				g.localUpdateHorizon = &lnwire.GossipTimestampRange{
-					ChainHash:      g.cfg.chainHash,
-					FirstTimestamp: uint32(updateHorizon.Unix()),
-					TimestampRange: math.MaxUint32,
-				}
-				err := g.cfg.sendToPeer(g.localUpdateHorizon)
+				err := g.sendGossipTimestampRange(
+					time.Now(), math.MaxUint32,
+				)
 				if err != nil {
-					log.Errorf("unable to send update "+
-						"horizon: %v", err)
+					log.Errorf("Unable to send update "+
+						"horizon to %x: %v",
+						g.cfg.peerPub, err)
 				}
 			}
 
 			// With our horizon set, we'll simply reply to any new
-			// message and exit if needed.
+			// messages or process any state transitions and exit if
+			// needed.
 			select {
 			case msg := <-g.gossipMsgs:
 				err := g.replyPeerQueries(msg)
@@ -471,11 +494,35 @@ func (g *gossipSyncer) channelGraphSyncer() {
 						"query: %v", err)
 				}
 
+			case req := <-g.syncTransitions:
+				req.errChan <- g.handleSyncTransition(req)
+
 			case <-g.quit:
 				return
 			}
 		}
 	}
+}
+
+// sendGossipTimestampRange constructs and sets a GossipTimestampRange for the
+// syncer and sends it to the remote peer.
+func (g *gossipSyncer) sendGossipTimestampRange(startTimestamp time.Time,
+	timestampRange uint32) error {
+
+	endTimestamp := startTimestamp.Add(
+		time.Duration(timestampRange) * time.Second,
+	)
+
+	log.Infof("gossipSyncer(%x): applying gossipFilter(start=%v, end=%v)",
+		g.cfg.peerPub[:], startTimestamp, endTimestamp)
+
+	g.localUpdateHorizon = &lnwire.GossipTimestampRange{
+		ChainHash:      g.cfg.chainHash,
+		FirstTimestamp: uint32(startTimestamp.Unix()),
+		TimestampRange: timestampRange,
+	}
+
+	return g.cfg.sendToPeer(g.localUpdateHorizon)
 }
 
 // synchronizeChanIDs is called by the channelGraphSyncer when we need to query
@@ -597,7 +644,10 @@ func (g *gossipSyncer) genChanRangeQuery() (*lnwire.QueryChannelRange, error) {
 	// we don't miss any channels. By default, we go back 1 day from the
 	// newest channel.
 	var startHeight uint32
+	syncerType := syncerType(atomic.LoadUint32(&g.syncType))
 	switch {
+	case syncerType == fullSync:
+		fallthrough
 	case newestChan.BlockHeight <= chanRangeQueryBuffer:
 		fallthrough
 	case newestChan.BlockHeight == 0:
@@ -973,7 +1023,105 @@ func (g *gossipSyncer) ProcessQueryMsg(msg lnwire.Message, peerQuit <-chan struc
 	}
 }
 
-// SyncerState returns the current syncerState of the target gossipSyncer.
+// ProcessSyncTransition sends a request to the gossip syncer to transition its
+// sync type to a new one.
+func (g *gossipSyncer) ProcessSyncTransition(newSyncType syncerType) error {
+	errChan := make(chan error, 1)
+	select {
+	case g.syncTransitions <- &syncTransitionReq{newSyncType, errChan}:
+	case <-time.After(syncTransitionTimeout):
+		return ErrSyncTransitionTimeout
+	case <-g.quit:
+		return ErrGossipSyncerExiting
+	}
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-g.quit:
+		return ErrGossipSyncerExiting
+	}
+}
+
+// handleSyncTransition handles a new sync type transition request.
+//
+// NOTE: The gossip syncer might have another sync state as a result of this
+// transition.
+func (g *gossipSyncer) handleSyncTransition(req *syncTransitionReq) error {
+	syncType := syncerType(atomic.LoadUint32(&g.syncType))
+	log.Debugf("gossipSyncer(%x): transitioning from %v to %v",
+		g.cfg.peerPub, syncType, req.newSyncType)
+
+	switch req.newSyncType {
+	// If an active sync has been requested, then we should resume receiving
+	// new graph updates from the remote peer.
+	case activeSync:
+		err := g.sendGossipTimestampRange(time.Now(), math.MaxUint32)
+		if err != nil {
+			return fmt.Errorf("unable to send active update "+
+				"horizon: %v", err)
+		}
+
+		// If the gossip syncer currently has a passiveSync type, then
+		// we'll revert to our initial syncingChans state to ensure we
+		// can reconcile any channels we're missing that the remote peer
+		// has. This isn't needed when transitioning from a fullSync, as
+		// both sides have synced their complete graphs with each other.
+		if syncType == passiveSync {
+			atomic.StoreUint32(&g.state, uint32(syncingChans))
+		}
+
+	// If a passiveSync transition has been requested, then we should no
+	// longer receive any new updates from the remote peer. We can do this
+	// by setting our update horizon to a range in the past (specifically,
+	// Jan 1 1970), ensuring no graph updates match the timestamp range.
+	case passiveSync:
+		// We'll only send the new update if we're transitioning from an
+		// activeSync, since that's the only state that allows receiving
+		// new graph updates from the remote peer.
+		if syncType != activeSync {
+			break
+		}
+
+		err := g.sendGossipTimestampRange(zeroTimestamp, 0)
+		if err != nil {
+			return fmt.Errorf("unable to send passive update "+
+				"horizon: %v", err)
+		}
+
+		g.localUpdateHorizon = nil
+
+	// If a full sync transition has been requested, we'll need to go back
+	// to our initial syncingChans state to ensure we can sync with the
+	// remote peer's entire graph.
+	case fullSync:
+		if syncType == activeSync {
+			err := g.sendGossipTimestampRange(zeroTimestamp, 0)
+			if err != nil {
+				return fmt.Errorf("unable to send passive "+
+					"update horizon: %v", err)
+			}
+
+			g.localUpdateHorizon = nil
+		}
+
+		atomic.StoreUint32(&g.state, uint32(syncingChans))
+
+	default:
+		return fmt.Errorf("unhandled sync transition %v",
+			req.newSyncType)
+	}
+
+	atomic.StoreUint32(&g.syncType, uint32(req.newSyncType))
+	return nil
+}
+
+// SyncState returns the current syncerState of the target gossipSyncer.
 func (g *gossipSyncer) SyncState() syncerState {
 	return syncerState(atomic.LoadUint32(&g.state))
+}
+
+// SyncType returns the current syncerType of the target gossipSyncer.
+func (g *gossipSyncer) SyncType() syncerType {
+	return syncerType(atomic.LoadUint32(&g.syncType))
 }
