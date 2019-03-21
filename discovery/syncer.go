@@ -444,13 +444,7 @@ func (g *gossipSyncer) channelGraphSyncer() {
 			// do so now.
 			syncType := syncerType(atomic.LoadUint32(&g.syncType))
 			if g.localUpdateHorizon == nil && syncType == activeSync {
-				// TODO(roasbeef): query DB for most recent
-				// update?
-
-				// We'll give an hours room in our update
-				// horizon to ensure we don't miss any newer
-				// items.
-				updateHorizon := time.Now().Add(-time.Hour * 1)
+				updateHorizon := time.Now()
 				log.Infof("gossipSyncer(%x): applying "+
 					"gossipFilter(start=%v)",
 					g.cfg.peerPub[:], updateHorizon)
