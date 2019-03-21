@@ -13,6 +13,35 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// syncerType encapsulates the different types of syncing mechanisms for a gossip
+// syncer.
+type syncerType uint8
+
+const (
+	// activeSync denotes that a gossip syncer should exercise its default
+	// behavior. This includes retaliating the set of missing graph updates
+	// with the remote peer _and_ receiving new updates from them.
+	activeSync syncerType = iota
+
+	// passiveSync denotes that a gossip syncer:
+	//   1. Should not attempt to query the remote peer for graph updates.
+	//   2. Should respond to queries from the remote peer.
+	//   3. Should not receive new updates from the remote peer.
+	passiveSync
+)
+
+// String returns a human readable string describing the target syncerType.
+func (t syncerType) String() string {
+	switch t {
+	case activeSync:
+		return "activeSync"
+	case passiveSync:
+		return "passiveSync"
+	default:
+		return fmt.Sprintf("unknown sync type %d", t)
+	}
+}
+
 // syncerState is an enum that represents the current state of the
 // gossipSyncer.  As the syncer is a state machine, we'll gate our actions
 // based off of the current state and the next incoming message.
@@ -174,6 +203,12 @@ type gossipSyncer struct {
 	// NOTE: This variable MUST be used atomically.
 	state uint32
 
+	// syncType denotes the syncerType the gossip syncer is currently
+	// exercising.
+	//
+	// NOTE: This variable MUST be used atomically.
+	syncType uint32
+
 	// gossipMsgs is a channel that all messages from the target peer will
 	// be sent over.
 	gossipMsgs chan lnwire.Message
@@ -274,8 +309,11 @@ func (g *gossipSyncer) channelGraphSyncer() {
 
 	for {
 		state := atomic.LoadUint32(&g.state)
-		log.Debugf("gossipSyncer(%x): state=%v", g.cfg.peerPub[:],
-			syncerState(state))
+		syncType := atomic.LoadUint32(&g.syncType)
+
+		log.Debugf("gossipSyncer(%x): state=%v, type=%v",
+			g.cfg.peerPub[:], syncerState(state),
+			syncerType(syncType))
 
 		switch syncerState(state) {
 		// When we're in this state, we're trying to synchronize our
@@ -404,7 +442,8 @@ func (g *gossipSyncer) channelGraphSyncer() {
 			// If we haven't yet sent out our update horizon, and
 			// we want to receive real-time channel updates, we'll
 			// do so now.
-			if g.localUpdateHorizon == nil && g.cfg.syncChanUpdates {
+			syncType := syncerType(atomic.LoadUint32(&g.syncType))
+			if g.localUpdateHorizon == nil && syncType == activeSync {
 				// TODO(roasbeef): query DB for most recent
 				// update?
 
