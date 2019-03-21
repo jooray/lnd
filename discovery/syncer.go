@@ -210,8 +210,6 @@ type gossipSyncerCfg struct {
 // filter out which messages should be sent to a remote peer based on their
 // update horizon. If the update horizon isn't specified, then we won't send
 // them any channel updates at all.
-//
-// TODO(roasbeef): modify to only sync from one peer at a time?
 type gossipSyncer struct {
 	started uint32
 	stopped uint32
