@@ -713,7 +713,7 @@ service Lightning {
     method once lnd is running, or via the InitWallet and UnlockWallet methods
     from the WalletUnlocker service.
     */
-    rpc ExportChannelBackup(ChannelPoint) returns (ChannelBackup) {
+    rpc ExportChannelBackup(ExportChannelBackupRequest) returns (ChannelBackup) {
     };
 
     /**
@@ -2254,6 +2254,11 @@ message ForwardingHistoryResponse {
 
    /// The index of the last time in the set of returned forwarding events. Can be used to seek further, pagination style.
    uint32 last_offset_index = 2 [json_name = "last_offset_index"];
+}
+
+message ExportChannelBackupRequest {
+    /// The target chanenl point to obtain a back up for.
+    ChannelPoint chan_point = 1;
 }
 
 message ChannelBackup {

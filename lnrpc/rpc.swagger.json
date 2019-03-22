@@ -1493,7 +1493,7 @@
       "properties": {
         "chan_point": {
           "$ref": "#/definitions/lnrpcChannelPoint",
-          "description": "*\nIdentifies the channel that this back up belongs to."
+          "description": "*\nIdentifies the channel that this backup belongs to."
         },
         "chan_backup": {
           "type": "string",
@@ -2422,7 +2422,7 @@
         "multi_chan_backup": {
           "type": "string",
           "format": "byte",
-          "description": "*\nA single encrypted blob containig all the static channel backups of the\nchannel listed above. This can be stored as a single file or blob, and\nsafely be replaced with any prior/future versions."
+          "description": "*\nA single encrypted blob containing all the static channel backups of the\nchannel listed above. This can be stored as a single file or blob, and\nsafely be replaced with any prior/future versions."
         }
       }
     },
