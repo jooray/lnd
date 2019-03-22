@@ -1549,7 +1549,7 @@ func TestWakeUpOnStaleBranch(t *testing.T) {
 	}
 
 	// Check that the fundingTxs are in the graph db.
-	_, _, has, err := ctx.graph.HasChannelEdge(chanID1)
+	_, _, has, _, err := ctx.graph.HasChannelEdge(chanID1)
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID1)
 	}
@@ -1557,7 +1557,7 @@ func TestWakeUpOnStaleBranch(t *testing.T) {
 		t.Fatalf("could not find edge in graph")
 	}
 
-	_, _, has, err = ctx.graph.HasChannelEdge(chanID2)
+	_, _, has, _, err = ctx.graph.HasChannelEdge(chanID2)
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID2)
 	}
@@ -1607,7 +1607,7 @@ func TestWakeUpOnStaleBranch(t *testing.T) {
 	// The channel with chanID2 should not be in the database anymore,
 	// since it is not confirmed on the longest chain. chanID1 should
 	// still be.
-	_, _, has, err = ctx.graph.HasChannelEdge(chanID1)
+	_, _, has, _, err = ctx.graph.HasChannelEdge(chanID1)
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID1)
 	}
@@ -1615,7 +1615,7 @@ func TestWakeUpOnStaleBranch(t *testing.T) {
 		t.Fatalf("did not find edge in graph")
 	}
 
-	_, _, has, err = ctx.graph.HasChannelEdge(chanID2)
+	_, _, has, _, err = ctx.graph.HasChannelEdge(chanID2)
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID2)
 	}
@@ -1755,7 +1755,7 @@ func TestDisconnectedBlocks(t *testing.T) {
 	}
 
 	// Check that the fundingTxs are in the graph db.
-	_, _, has, err := ctx.graph.HasChannelEdge(chanID1)
+	_, _, has, _, err := ctx.graph.HasChannelEdge(chanID1)
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID1)
 	}
@@ -1763,7 +1763,7 @@ func TestDisconnectedBlocks(t *testing.T) {
 		t.Fatalf("could not find edge in graph")
 	}
 
-	_, _, has, err = ctx.graph.HasChannelEdge(chanID2)
+	_, _, has, _, err = ctx.graph.HasChannelEdge(chanID2)
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID2)
 	}
@@ -1796,7 +1796,7 @@ func TestDisconnectedBlocks(t *testing.T) {
 
 	// chanID2 should not be in the database anymore, since it is not
 	// confirmed on the longest chain. chanID1 should still be.
-	_, _, has, err = ctx.graph.HasChannelEdge(chanID1)
+	_, _, has, _, err = ctx.graph.HasChannelEdge(chanID1)
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID1)
 	}
@@ -1804,7 +1804,7 @@ func TestDisconnectedBlocks(t *testing.T) {
 		t.Fatalf("did not find edge in graph")
 	}
 
-	_, _, has, err = ctx.graph.HasChannelEdge(chanID2)
+	_, _, has, _, err = ctx.graph.HasChannelEdge(chanID2)
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID2)
 	}
@@ -1876,7 +1876,7 @@ func TestRouterChansClosedOfflinePruneGraph(t *testing.T) {
 	}
 
 	// The router should now be aware of the channel we created above.
-	_, _, hasChan, err := ctx.graph.HasChannelEdge(chanID1.ToUint64())
+	_, _, hasChan, _, err := ctx.graph.HasChannelEdge(chanID1.ToUint64())
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID1)
 	}
@@ -1957,13 +1957,122 @@ func TestRouterChansClosedOfflinePruneGraph(t *testing.T) {
 
 	// At this point, the channel that was pruned should no longer be known
 	// by the router.
-	_, _, hasChan, err = ctx.graph.HasChannelEdge(chanID1.ToUint64())
+	_, _, hasChan, _, err = ctx.graph.HasChannelEdge(chanID1.ToUint64())
 	if err != nil {
 		t.Fatalf("error looking for edge: %v", chanID1)
 	}
 	if hasChan {
 		t.Fatalf("channel was found in graph but shouldn't have been")
 	}
+}
+
+// TestPruneChannelGraphDoubleDisabled test that we can properly prune channels
+// with both edges disabled from our channel graph.
+func TestPruneChannelGraphDoubleDisabled(t *testing.T) {
+	t.Parallel()
+
+	// For this test, we'll be creating three channels:
+	//   * The first will have *both* edges disabled.
+	//   * The second will *not* have any edges disabled.
+	//   * The third will have *one* edge disabled.
+	//
+	// With this setup, only the first will be pruned from the graph.
+	testChannels := []*testChannel{
+		symmetricTestChannel("a", "b", 100000, &testChannelPolicy{
+			Disabled: true,
+		}, 1),
+		symmetricTestChannel("b", "c", 100000, &testChannelPolicy{
+			Disabled: false,
+		}, 2),
+		symmetricTestChannel("c", "d", 100000, &testChannelPolicy{
+			Disabled: false,
+		}, 3),
+	}
+	testChannels[len(testChannels)-1].Node1.Disabled = true
+
+	// We'll create our test graph and router backed with these test
+	// channels we've created.
+	testGraph, err := createTestGraphFromChannels(testChannels)
+	if err != nil {
+		t.Fatalf("unable to create test graph: %v", err)
+	}
+	defer testGraph.cleanUp()
+
+	const startingHeight = 100
+	ctx, cleanUp, err := createTestCtxFromGraphInstance(
+		startingHeight, testGraph,
+	)
+	if err != nil {
+		t.Fatalf("unable to create test context: %v", err)
+	}
+	defer cleanUp()
+
+	// assertChannelExistence is a helper closure that ensures channels are
+	// properly pruned from the graph marked as zombies.
+	assertChannelExistence := func(channels ...uint64) {
+		t.Helper()
+
+		s := make(map[uint64]struct{}, len(channels))
+		for _, channel := range channels {
+			s[channel] = struct{}{}
+		}
+
+		for _, channel := range testChannels {
+			_, shouldExist := s[channel.ChannelID]
+
+			_, _, exist, isZombie, err := ctx.router.cfg.Graph.HasChannelEdge(
+				channel.ChannelID,
+			)
+			if err != nil {
+				t.Fatalf("unable to determine existence of "+
+					"channel=%v in the graph: %v",
+					channel.ChannelID, err)
+			}
+			if shouldExist && !exist {
+				t.Fatalf("expected channel=%v to exist within "+
+					"the graph", channel.ChannelID)
+			}
+			if !shouldExist && exist {
+				t.Fatalf("expected channel=%v to not exist "+
+					"within the graph", channel.ChannelID)
+			}
+			if shouldExist && isZombie {
+				t.Fatalf("expected existent channel=%v to not "+
+					"be a zombie", channel.ChannelID)
+			}
+			if !shouldExist && !isZombie {
+				t.Fatalf("expected non-existent channel=%v to "+
+					"be a zombie", channel.ChannelID)
+			}
+		}
+	}
+
+	// All of the channels we created above have a LastUpdate of `testTime`.
+	// To ensure these channels are not pruned because of the stale
+	// heuristic, we'll set the window to an hour before the existing
+	// LastUpdate.
+	ctx.router.cfg.ChannelPruneExpiry = time.Since(testTime.Add(-time.Hour))
+
+	// All the channels should exist within the graph before pruning them.
+	assertChannelExistence(1, 2, 3)
+
+	// If we attempt to prune them without AssumeChannelValid being set,
+	// none should be pruned.
+	if err := ctx.router.pruneZombieChans(); err != nil {
+		t.Fatalf("unable to prune zombie channels: %v", err)
+	}
+
+	assertChannelExistence(1, 2, 3)
+
+	// Now that AssumeChannelValid is set, we'll prune the graph again and
+	// the first channel should be the only one pruned.
+	ctx.router.cfg.AssumeChannelValid = true
+
+	if err := ctx.router.pruneZombieChans(); err != nil {
+		t.Fatalf("unable to prune zombie channels: %v", err)
+	}
+
+	assertChannelExistence(2, 3)
 }
 
 // TestFindPathFeeWeighting tests that the findPath method will properly prefer
@@ -2189,10 +2298,12 @@ func TestIsStaleEdgePolicy(t *testing.T) {
 	// If we query for staleness before adding the edge, we should get
 	// false.
 	updateTimeStamp := time.Unix(123, 0)
-	if ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 0) {
+	isStale, _ := ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 0)
+	if isStale {
 		t.Fatalf("router failed to detect fresh edge policy")
 	}
-	if ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 1) {
+	isStale, _ = ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 1)
+	if isStale {
 		t.Fatalf("router failed to detect fresh edge policy")
 	}
 
@@ -2239,20 +2350,24 @@ func TestIsStaleEdgePolicy(t *testing.T) {
 
 	// Now that the edges have been added, an identical (chanID, flag,
 	// timestamp) tuple for each edge should be detected as a stale edge.
-	if !ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 0) {
+	isStale, _ = ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 0)
+	if !isStale {
 		t.Fatalf("router failed to detect stale edge policy")
 	}
-	if !ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 1) {
+	isStale, _ = ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 1)
+	if !isStale {
 		t.Fatalf("router failed to detect stale edge policy")
 	}
 
 	// If we now update the timestamp for both edges, the router should
 	// detect that this tuple represents a fresh edge.
 	updateTimeStamp = time.Unix(9999, 0)
-	if ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 0) {
+	isStale, _ = ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 0)
+	if isStale {
 		t.Fatalf("router failed to detect fresh edge policy")
 	}
-	if ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 1) {
+	isStale, _ = ctx.router.IsStaleEdgePolicy(*chanID, updateTimeStamp, 1)
+	if isStale {
 		t.Fatalf("router failed to detect fresh edge policy")
 	}
 }

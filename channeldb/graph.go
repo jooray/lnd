@@ -106,6 +106,12 @@ var (
 	// maps: outPoint -> chanID
 	channelPointBucket = []byte("chan-index")
 
+	// zombieBucket is a sub-bucket of the main edgeBucket bucket
+	// responsible for maintaining an index of zombie channels.
+	//
+	// maps: chanID -> empty byte slice
+	zombieBucket = []byte("zombie-index")
+
 	// graphMetaBucket is a top-level bucket which stores various meta-deta
 	// related to the on-disk channel graph. Data stored in this bucket
 	// includes the block to which the graph has been synced to, the total
@@ -123,9 +129,6 @@ var (
 	// case we'll remove all entries from the prune log with a block height
 	// that no longer exists.
 	pruneLogBucket = []byte("prune-log")
-
-	edgeBloomKey = []byte("edge-bloom")
-	nodeBloomKey = []byte("node-bloom")
 )
 
 const (
@@ -584,17 +587,22 @@ func (c *ChannelGraph) addChannelEdge(tx *bbolt.Tx, edge *ChannelEdgeInfo) error
 	return chanIndex.Put(b.Bytes(), chanKey[:])
 }
 
-// HasChannelEdge returns true if the database knows of a channel edge with the
-// passed channel ID, and false otherwise. If an edge with that ID is found
-// within the graph, then two time stamps representing the last time the edge
-// was updated for both directed edges are returned along with the boolean.
-func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time, bool, error) {
+// HasChannelEdge returns true for the first boolean if the database knows of a
+// channel edge with the passed channel ID, and false otherwise. If an edge with
+// that ID is found within the graph, then two time stamps representing the last
+// time the edge was updated for both directed edges are returned along with the
+// boolean. If the edge doesn't exist, then the second boolean can be used to
+// determine whether the edge has been deemed as a zombie.
+func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time,
+	bool, bool, error) {
+
 	// TODO(roasbeef): check internal bloom filter first
 
 	var (
 		node1UpdateTime time.Time
 		node2UpdateTime time.Time
 		exists          bool
+		isZombie        bool
 	)
 
 	if err := c.db.View(func(tx *bbolt.Tx) error {
@@ -610,7 +618,15 @@ func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time, bool
 		var channelID [8]byte
 		byteOrder.PutUint64(channelID[:], chanID)
 		if edgeIndex.Get(channelID[:]) == nil {
-			exists = false
+			// If the edge doesn't exist, we'll also query for its
+			// existence in our zombie index.
+			zombieIndex := edges.Bucket(zombieBucket)
+			if zombieIndex == nil {
+				return nil
+			}
+
+			isZombie = isZombieEdge(zombieIndex, chanID)
+
 			return nil
 		}
 
@@ -641,10 +657,10 @@ func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time, bool
 
 		return nil
 	}); err != nil {
-		return time.Time{}, time.Time{}, exists, err
+		return time.Time{}, time.Time{}, exists, isZombie, err
 	}
 
-	return node1UpdateTime, node2UpdateTime, exists, nil
+	return node1UpdateTime, node2UpdateTime, exists, isZombie, nil
 }
 
 // UpdateChannelEdge retrieves and update edge of the graph database. Method
@@ -2783,6 +2799,73 @@ func (c *ChannelGraph) ChannelView() ([]EdgePoint, error) {
 // NewChannelEdgePolicy returns a new blank ChannelEdgePolicy.
 func (c *ChannelGraph) NewChannelEdgePolicy() *ChannelEdgePolicy {
 	return &ChannelEdgePolicy{db: c.db}
+}
+
+// MarkEdgeZombie marks an edge as a zombie within our zombie index.
+func (c *ChannelGraph) MarkEdgeZombie(chanID uint64) error {
+	return c.db.Batch(func(tx *bbolt.Tx) error {
+		edges := tx.Bucket(edgeBucket)
+		if edges == nil {
+			return ErrGraphNoEdgesFound
+		}
+		zombieIndex, err := edges.CreateBucketIfNotExists(zombieBucket)
+		if err != nil {
+			return err
+		}
+
+		var k [8]byte
+		byteOrder.PutUint64(k[:], chanID)
+		return zombieIndex.Put(k[:], []byte{})
+	})
+}
+
+// MarkEdgeLive clears an edge from our zombie index, deeming it as live.
+func (c *ChannelGraph) MarkEdgeLive(chanID uint64) error {
+	return c.db.Batch(func(tx *bbolt.Tx) error {
+		edges := tx.Bucket(edgeBucket)
+		if edges == nil {
+			return ErrGraphNoEdgesFound
+		}
+		zombieIndex := edges.Bucket(zombieBucket)
+		if zombieIndex == nil {
+			return nil
+		}
+
+		var k [8]byte
+		byteOrder.PutUint64(k[:], chanID)
+		return zombieIndex.Delete(k[:])
+	})
+}
+
+// IsZombieEdge returns whether the edge is considered zombie.
+func (c *ChannelGraph) IsZombieEdge(chanID uint64) bool {
+	isZombie := false
+	err := c.db.View(func(tx *bbolt.Tx) error {
+		edges := tx.Bucket(edgeBucket)
+		if edges == nil {
+			return ErrGraphNoEdgesFound
+		}
+		zombieIndex := edges.Bucket(zombieBucket)
+		if zombieIndex == nil {
+			return nil
+		}
+
+		isZombie = isZombieEdge(zombieIndex, chanID)
+		return nil
+	})
+	if err != nil {
+		return false
+	}
+
+	return isZombie
+}
+
+// isZombieEdge returns whether an entry exists for the given channel in the
+// zombie index.
+func isZombieEdge(zombieIndex *bbolt.Bucket, chanID uint64) bool {
+	var k [8]byte
+	byteOrder.PutUint64(k[:], chanID)
+	return zombieIndex.Get(k[:]) != nil
 }
 
 func putLightningNode(nodeBucket *bbolt.Bucket, aliasBucket *bbolt.Bucket,
