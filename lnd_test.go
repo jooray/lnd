@@ -13100,7 +13100,7 @@ func testChannelBackupUpdates(net *lntest.NetworkHarness, t *harnessTest) {
 		chanPoints = append(chanPoints, chanPoint)
 	}
 
-	// Using this helper function, we'll maintain a pointe rot he latest
+	// Using this helper function, we'll maintain a pointer to the latest
 	// channel backup so we can compare it to the on disk state.
 	var currentBackup *lnrpc.ChanBackupSnapshot
 	assertBackupNtfns := func(numNtfns int) {
@@ -13415,15 +13415,12 @@ func testChanRestoreScenario(t *harnessTest, net *lntest.NetworkHarness,
 	if err != nil {
 		t.Fatalf("unable to create new node: %v", err)
 	}
+	defer shutdownAndAssert(net, t, dave)
 	carol, err := net.NewNode("carol", nil)
 	if err != nil {
 		t.Fatalf("unable to make new node: %v", err)
 	}
-
-	defer func() {
-		shutdownAndAssert(net, t, dave)
-		shutdownAndAssert(net, t, carol)
-	}()
+	defer shutdownAndAssert(net, t, carol)
 
 	// Now that our new node is created, we'll give him some coins it can
 	// use to open channels with Carol.
@@ -13743,10 +13740,6 @@ func testChannelBackupRestore(net *lntest.NetworkHarness, t *harnessTest) {
 	// ann is updated?
 
 	for _, testCase := range testCases {
-		if testCase.restoreMethod == nil {
-			continue
-		}
-
 		success := t.t.Run(testCase.name, func(_ *testing.T) {
 			testChanRestoreScenario(t, net, &testCase, password)
 		})
