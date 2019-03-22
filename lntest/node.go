@@ -430,11 +430,11 @@ func (hn *HarnessNode) initClientWhenReady() error {
 		conn    *grpc.ClientConn
 		connErr error
 	)
-	if err := WaitPredicate(func() bool {
+	if err := WaitNoError(func() error {
 		conn, connErr = hn.ConnectRPC(true)
-		return connErr == nil
-	}, 5*time.Second); err != nil {
 		return connErr
+	}, 5*time.Second); err != nil {
+		return err
 	}
 
 	return hn.initLightningClient(conn)
@@ -448,7 +448,7 @@ func (hn *HarnessNode) initClientWhenReady() error {
 func (hn *HarnessNode) Init(ctx context.Context,
 	initReq *lnrpc.InitWalletRequest) error {
 
-	timeout := time.Duration(time.Second * 15)
+	timeout := time.Duration(DefaultTimeout)
 	ctxt, _ := context.WithTimeout(ctx, timeout)
 	_, err := hn.InitWallet(ctxt, initReq)
 	if err != nil {
@@ -467,7 +467,7 @@ func (hn *HarnessNode) Init(ctx context.Context,
 func (hn *HarnessNode) Unlock(ctx context.Context,
 	unlockReq *lnrpc.UnlockWalletRequest) error {
 
-	timeout := time.Duration(time.Second * 15)
+	timeout := time.Duration(DefaultTimeout)
 	ctxt, _ := context.WithTimeout(ctx, timeout)
 
 	// Otherwise, we'll need to unlock the node before it's able to start
