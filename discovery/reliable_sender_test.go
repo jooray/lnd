@@ -8,6 +8,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/lightningnetwork/lnd/lnpeer"
+	"github.com/lightningnetwork/lnd/lntest"
 	"github.com/lightningnetwork/lnd/lnwire"
 )
 
@@ -55,29 +56,6 @@ func assertMsgsSent(t *testing.T, msgChan chan lnwire.Message,
 			}
 		case <-time.After(time.Second):
 			t.Fatal("reliable sender did not send message to peer")
-		}
-	}
-}
-
-// waitPredicate is a helper test function that will wait for a timeout period
-// of time until the passed predicate returns true.
-func waitPredicate(t *testing.T, timeout time.Duration, pred func() bool) {
-	t.Helper()
-
-	const pollInterval = 20 * time.Millisecond
-	exitTimer := time.After(timeout)
-
-	for {
-		<-time.After(pollInterval)
-
-		select {
-		case <-exitTimer:
-			t.Fatalf("predicate not satisfied after timeout")
-		default:
-		}
-
-		if pred() {
-			return
 		}
 	}
 }
@@ -263,7 +241,7 @@ func TestReliableSenderStaleMessages(t *testing.T) {
 	// once. Once the message is removed, the peerHandler should be torn
 	// down as there are no longer any pending messages within the store.
 	var predErr error
-	waitPredicate(t, time.Second, func() bool {
+	err := lntest.WaitPredicate(func() bool {
 		msgs, err := reliableSender.cfg.MessageStore.MessagesForPeer(
 			peerPubKey,
 		)
@@ -278,10 +256,9 @@ func TestReliableSenderStaleMessages(t *testing.T) {
 			return false
 		}
 
-		predErr = nil
 		return true
-	})
-	if predErr != nil {
+	}, time.Second)
+	if err != nil {
 		t.Fatal(predErr)
 	}
 
