@@ -3693,7 +3693,11 @@ func exportChanBackup(ctx *cli.Context) error {
 			return err
 		}
 
-		chanBackup, err := client.ExportChannelBackup(ctxb, chanPointRPC)
+		chanBackup, err := client.ExportChannelBackup(
+			ctxb, &lnrpc.ExportChannelBackupRequest{
+				ChanPoint: chanPointRPC,
+			},
+		)
 		if err != nil {
 			return err
 		}
