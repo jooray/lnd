@@ -1429,6 +1429,14 @@ func (p *peer) writeMessage(msg lnwire.Message) error {
 //
 // NOTE: This method MUST be run as a goroutine.
 func (p *peer) writeHandler() {
+	// We'll stop the timer after a new messages is received, and also
+	// reset it after we process the next message.
+	idleTimer := time.AfterFunc(idleTimeout, func() {
+		err := fmt.Errorf("Peer %s no write for %s -- disconnecting",
+			p, idleTimeout)
+		p.Disconnect(err)
+	})
+
 	var exitErr error
 
 	const (
@@ -1453,6 +1461,11 @@ out:
 				select {
 				case <-time.After(retryDelay):
 				case <-p.quit:
+					// Inform synchronous writes that the
+					// peer is exiting.
+					if outMsg.errChan != nil {
+						outMsg.errChan <- ErrPeerExiting
+					}
 					exitErr = ErrPeerExiting
 					break out
 				}
@@ -1469,10 +1482,10 @@ out:
 				atomic.StoreInt64(&p.pingLastSend, now)
 			}
 
-			// Write out the message to the socket, responding with
-			// error if `errChan` is non-nil and not a timeout
-			// error. The `errChan` allows callers to optionally
-			// synchronize sends with the writeHandler.
+			// Write out the message to the socket. If a timeout
+			// error is encountered, we will catch this and retry
+			// after backing off in case the remote peer is just
+			// slow to process messages from the wire.
 			err := p.writeMessage(outMsg.msg)
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 				// Increase the retry delay in the event of a
@@ -1497,6 +1510,16 @@ out:
 
 				goto retryWithDelay
 			}
+
+			// The write succeeded, reset the idle timer to prevent
+			// us from disconnecting the peer.
+			if !idleTimer.Stop() {
+				<-idleTimer.C
+			}
+			idleTimer.Reset(idleTimeout)
+
+			// If the peer requested a synchronous write, respond
+			// with the error.
 			if outMsg.errChan != nil {
 				outMsg.errChan <- err
 			}
