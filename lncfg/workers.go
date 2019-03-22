@@ -1,19 +1,24 @@
 package lncfg
 
-import "fmt"
+import (
+	"fmt"
+	"runtime"
+)
 
 const (
 	// DefaultReadWorkers is the default maximum number of concurrent
 	// workers used by the daemon's read pool.
-	DefaultReadWorkers = 16
+	DefaultReadWorkers = 100
 
 	// DefaultWriteWorkers is the default maximum number of concurrent
 	// workers used by the daemon's write pool.
-	DefaultWriteWorkers = 16
+	DefaultWriteWorkers = 100
+)
 
+var (
 	// DefaultSigWorkers is the default maximum number of concurrent workers
 	// used by the daemon's sig pool.
-	DefaultSigWorkers = 8
+	DefaultSigWorkers = runtime.NumCPU()
 )
 
 // Workers exposes CLI configuration for turning resources consumed by worker
