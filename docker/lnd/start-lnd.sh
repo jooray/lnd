@@ -52,6 +52,7 @@ fi
 exec lnd \
     --noseedbackup \
     --logdir="/data" \
+    --rpclisten=0.0.0.0:10009 \
     "--$CHAIN.active" \
     "--$CHAIN.$NETWORK" \
     "--$CHAIN.node"="btcd" \
